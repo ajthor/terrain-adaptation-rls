@@ -15,7 +15,7 @@ def create_model(device, n_basis=8):
     def basis_factory():
         return NeuralODE(
             ode_func=ODEFunc(
-                model=MLP(layer_sizes=[8, 128, 128, 6], activation=torch.nn.ReLU())
+                model=MLP(layer_sizes=[9, 128, 128, 6], activation=torch.nn.ReLU())
             ),
             integrator=rk4_step,
         )

@@ -14,7 +14,7 @@ def create_model(device, n_basis=8):
     model = NeuralODE(
         ode_func=ODEFunc(
             model=MLP(
-                layer_sizes=[8, int(128 * sqrt(n_basis)), int(128 * sqrt(n_basis)), 6],
+                layer_sizes=[9, int(128 * sqrt(n_basis)), int(128 * sqrt(n_basis)), 6],
                 activation=torch.nn.ReLU(),
             )
         ),
