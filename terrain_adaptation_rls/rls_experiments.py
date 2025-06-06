@@ -17,6 +17,8 @@ from typing import List
 
 import tqdm
 
+import matplotlib.pyplot as plt
+
 if torch.cuda.is_available():
     device = "cuda"
 elif torch.backends.mps.is_available():
@@ -41,13 +43,13 @@ class kStepTestDataset(IterableDataset):
     def __iter__(self):
         while True:
             # Traj length
-            traj_length = 500
+            traj_length = 1500
 
             # Sample random points from the data without replacement
             indices = torch.randperm(self.inputs[0].shape[0])
             example_indices = indices[: self.n_example_points]
 
-            init_pt = torch.randint(self.inputs[0].shape[0]-1050, (1,)).item() 
+            init_pt = torch.randint(self.inputs[0].shape[0]-2050, (1,)).item() 
 
             _xs = self.inputs[0][:, 1:]
             _dt = self.targets[0][:, 0] - self.inputs[0][:, 0]
@@ -91,15 +93,14 @@ for idx in all_scenes:
     scene_inputs[idx], scene_targets[idx] = scene_data[key]
 
 # Choose the evaluation scene
-scene = all_scenes[0]  # Only one scene for now
+scene = 0 # Only one scene for now
 
 # Create a dataset for testing prediction errors. 
+batch_size = 100
 scene_input, scene_target = scene_inputs[scene], scene_targets[scene]
 dataset = kStepTestDataset([scene_input], [scene_target], n_example_points=1000)
-dataloader = DataLoader(dataset,batch_size=1)
+dataloader = DataLoader(dataset,batch_size=batch_size)
 dataloader_iter = iter(dataloader)
-
-# Create model
 
 # Load the model.
 n_basis = 8 
@@ -110,33 +111,28 @@ model, loss_fn = load_model("function_encoder", device, n_basis, model_path)
 
 # Evaluate model
 
-import matplotlib.pyplot as plt
-
 
 model.eval()
 with torch.no_grad():
 
     # Initialize the coefficients, matching an assumed batch size of 1
-    coefficients = torch.zeros(1, n_basis, device=device)
-    P = torch.eye(n_basis, device=device).unsqueeze(0)
+    coefficients = torch.zeros(batch_size, n_basis, device=device)
+    P = torch.eye(n_basis, device=device).repeat(batch_size,1,1)#.unsqueeze(0)
 
-    losses_baseline = []
-    losses_rls = []
-    coefficient_baseline_norms = []
-    coefficient_rls_norms = []
+    baseline_err_mean = []
+    baseline_err_std = []
+    rls_err_mean = []
+    rls_err_std = []
     parameter_estimate_norms = []
+    parameter_estimate_stds = []
 
     # Fetch new observation
     batch = next(dataloader_iter)
-    x, dt, u, y, example_xs, example_dt, example_ys = batch
-    print(x.shape, dt.shape, u.shape, y.shape, example_xs.shape, example_dt.shape, example_ys.shape)
+    x, dt, u, y, _, _, _ = batch
     x = x.to(device)
     dt = dt.to(device)
     u = u.to(device)
     y = y.to(device)
-    # example_xs = example_xs.to(device)
-    # example_dt = example_dt.to(device)
-    # example_ys = example_ys.to(device)
 
     # Compute baseline coefficients
     coefficients_baseline, _ = model.compute_coefficients((torch.cat((x, u), dim=-1), dt), y)
@@ -163,42 +159,22 @@ with torch.no_grad():
                 forgetting_factor=0.95,
             )
 
-            # Generate a new batch of data for evaluation
-            # n_points = 1000
-            # _y0 = torch.empty(1, n_points, 2, device=device).uniform_(*dataset.y0_range)
-            # _dt = torch.empty(1, n_points, device=device).uniform_(*dataset.dt_range)
-            # _y1 = rk4_step(van_der_pol, _y0, _dt, mu=mu)
-
-            # n_example_points = 100
-            # y0_example = _y0[:, :n_example_points, :]
-            # dt_example = _dt[:, :n_example_points]
-            # y1_example = _y1[:, :n_example_points, :]
-            # y0 = _y0[:, n_example_points:, :]
-            # dt = _dt[:, n_example_points:]
-            # y1 = _y1[:, n_example_points:, :]
 
             # Compute the baseline error
             pred_baseline = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients_baseline)
-            # coefficients_baseline, _ = model.compute_coefficients(
-            #     (y0_example, dt_example), y1_example
-            # )
-            # pred_baseline = model((y0, dt), coefficients=coefficients_baseline)
             loss_baseline = torch.nn.functional.mse_loss(pred_baseline, y_step)
 
-            # # Compute the recursive least squares prediction error
+            # Compute the recursive least squares prediction error
             pred = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients)
-            # pred = model((y0, dt), coefficients=coefficients)
             loss_rls = torch.nn.functional.mse_loss(pred, y_step)
 
-            losses_baseline.append(loss_baseline.item())
-            losses_rls.append(loss_rls.item())
-
-            # coefficient_baseline_norms.append(
-            #     coefficients_baseline.norm(dim=-1).mean().item()
-            # )
-            coefficient_rls_norms.append(coefficients.norm(dim=-1).mean().item())
+            baseline_err_mean.append(torch.norm(y_step - pred_baseline, dim=-1).mean().item())
+            baseline_err_std.append(torch.norm(y_step - pred_baseline, dim=-1).std().item())
+            rls_err_mean.append(torch.norm(y_step - pred, dim=-1).mean().item())
+            rls_err_std.append(torch.norm(y_step - pred, dim=-1).std().item())
 
             parameter_estimate_norms.append((coefficients - coefficients_baseline).norm(dim=-1).mean().item())
+            parameter_estimate_stds.append((coefficients - coefficients_baseline).norm(dim=-1).std().item())
 
             tqdm_bar.set_postfix(
                 {
@@ -207,14 +183,57 @@ with torch.no_grad():
                 }
             )
 
-    # Plot the losses
-    fig, ax = plt.subplots(1, 3, figsize=(12, 5))
-    ax[0].plot(losses_baseline, label="Baseline")
-    ax[0].plot(losses_rls, label="Recursive Least Squares")
+# Use STIX fonts (LaTeX-style) and apply them consistently
+plt.rcParams.update({
+    'font.family': 'STIXGeneral',
+    'mathtext.fontset': 'stix',
+    'font.size': 9,
+    'axes.labelsize': 9,
+    'axes.titlesize': 9,
+    'legend.fontsize': 9,
+    'xtick.labelsize': 9,
+    'ytick.labelsize': 9,
+})
 
-    ax[1].plot(coefficient_baseline_norms, label="Baseline Coefficients Norm")
-    ax[1].plot(coefficient_rls_norms, label="RLS Coefficients Norm")
+# Plot the losses
+fig, ax = plt.subplots(1, 2, figsize=(12, 5))
 
-    ax[2].plot(parameter_estimate_norms, label="Parameter Estimate Norm (RLS - Baseline)")
-    
-    plt.show()
+ax[0].plot(baseline_err_mean, label="Baseline")
+ax[0].fill_between(
+    range(len(baseline_err_mean)),
+    [x - y for x, y in zip(baseline_err_mean, baseline_err_std)],
+    [x + y for x, y in zip(baseline_err_mean, baseline_err_std)],
+    alpha=0.2,
+    edgecolor='none',
+    linewidth=0.0,
+)
+ax[0].plot(rls_err_mean, label="RLS")
+ax[0].fill_between(
+    range(len(rls_err_mean)),
+    [x - y for x, y in zip(rls_err_mean, rls_err_std)],
+    [x + y for x, y in zip(rls_err_mean, rls_err_std)],
+    alpha=0.2,
+    edgecolor='none',
+    linewidth=0.0,
+)
+ax[0].set_xlabel("Lookahead Steps")
+ax[0].set_ylabel("Single Step Mean Prediction Error")
+
+ax[1].plot(parameter_estimate_norms)
+ax[1].fill_between(
+    range(len(parameter_estimate_stds)),
+    [x - y for x, y in zip(parameter_estimate_norms, parameter_estimate_stds)],
+    [x + y for x, y in zip(parameter_estimate_norms, parameter_estimate_stds)],
+    alpha=0.2,
+    edgecolor='none',
+    linewidth=0.0,
+)
+ax[1].set_xlabel("Lookahead Steps")
+ax[1].set_ylabel("Norm of Coeff. Error (RLS - Baseline)")
+
+ax[0].legend()
+
+plt.tight_layout()
+# plt.savefig(f"offline_rls_scene={scene}_forgetting=0_95.png", bbox_inches="tight", dpi=300)
+# plt.close()
+plt.show()
