@@ -1,14 +1,5 @@
-from typing import Callable, Optional, Tuple, Union
-
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
-
-
-from function_encoder.model.mlp import MLP
-from function_encoder.model.neural_ode import NeuralODE, ODEFunc
-from function_encoder.function_encoder import BasisFunctions, FunctionEncoder
-from function_encoder.utils.training import train_step
 
 from function_encoder.coefficients import recursive_least_squares_update
 from data.load_data import load_all_scenes
@@ -43,13 +34,13 @@ class kStepTestDataset(IterableDataset):
     def __iter__(self):
         while True:
             # Traj length
-            traj_length = 1500
+            traj_length = 200
 
             # Sample random points from the data without replacement
             indices = torch.randperm(self.inputs[0].shape[0])
             example_indices = indices[: self.n_example_points]
 
-            init_pt = torch.randint(self.inputs[0].shape[0]-2050, (1,)).item() 
+            init_pt = torch.randint(self.inputs[0].shape[0]-250, (1,)).item() 
 
             _xs = self.inputs[0][:, 1:]
             _dt = self.targets[0][:, 0] - self.inputs[0][:, 0]
@@ -93,7 +84,7 @@ for idx in all_scenes:
     scene_inputs[idx], scene_targets[idx] = scene_data[key]
 
 # Choose the evaluation scene
-scene = 0 # Only one scene for now
+scene = 7 # Only one scene for now
 
 # Create a dataset for testing prediction errors. 
 batch_size = 100
@@ -107,11 +98,13 @@ n_basis = 8
 seed = 0
 model_path = f"logs/function_encoder/seed={seed}/function_encoder_model.pth"
 model, loss_fn = load_model("function_encoder", device, n_basis, model_path)
+node_model_path = f"logs/neural_ode/seed={seed}/neural_ode_model.pth"
+node_model, node_loss_fn = load_model("neural_ode", device, n_basis, node_model_path)
 
 
 # Evaluate model
 
-
+node_model.eval()
 model.eval()
 with torch.no_grad():
 
@@ -119,10 +112,18 @@ with torch.no_grad():
     coefficients = torch.zeros(batch_size, n_basis, device=device)
     P = torch.eye(n_basis, device=device).repeat(batch_size,1,1)#.unsqueeze(0)
 
-    baseline_err_mean = []
-    baseline_err_std = []
-    rls_err_mean = []
-    rls_err_std = []
+    baseline_err_med = []
+    baseline_err_10th = []
+    baseline_err_90th = []
+
+    rls_err_med = []
+    rls_err_10th = []
+    rls_err_90th = []
+
+    node_err_med = []
+    node_err_10th = []
+    node_err_90th = []
+
     parameter_estimate_norms = []
     parameter_estimate_stds = []
 
@@ -168,20 +169,25 @@ with torch.no_grad():
             pred = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients)
             loss_rls = torch.nn.functional.mse_loss(pred, y_step)
 
-            baseline_err_mean.append(torch.norm(y_step - pred_baseline, dim=-1).mean().item())
-            baseline_err_std.append(torch.norm(y_step - pred_baseline, dim=-1).std().item())
-            rls_err_mean.append(torch.norm(y_step - pred, dim=-1).mean().item())
-            rls_err_std.append(torch.norm(y_step - pred, dim=-1).std().item())
+            # Compute the neural ODE error
+            node_pred = node_model((torch.cat((x_step, u_step), dim=-1), dt_step))
+            loss_node = torch.nn.functional.mse_loss(node_pred, y_step)
+
+            baseline_err_med.append(torch.norm(y_step - pred_baseline, dim=-1).median().item())
+            baseline_err_10th.append(torch.norm(y_step - pred_baseline, dim=-1).quantile(0.10).item())
+            baseline_err_90th.append(torch.norm(y_step - pred_baseline, dim=-1).quantile(0.90).item())
+
+            rls_err_med.append(torch.norm(y_step - pred, dim=-1).median().item())
+            rls_err_10th.append(torch.norm(y_step - pred, dim=-1).quantile(0.10).item())
+            rls_err_90th.append(torch.norm(y_step - pred, dim=-1).quantile(0.90).item())
+
+            node_err_med.append(torch.norm(y_step - node_pred, dim=-1).median().item())
+            node_err_10th.append(torch.norm(y_step - node_pred, dim=-1).quantile(0.10).item())
+            node_err_90th.append(torch.norm(y_step - node_pred, dim=-1).quantile(0.90).item())
 
             parameter_estimate_norms.append((coefficients - coefficients_baseline).norm(dim=-1).mean().item())
             parameter_estimate_stds.append((coefficients - coefficients_baseline).norm(dim=-1).std().item())
 
-            tqdm_bar.set_postfix(
-                {
-                    "loss_baseline": f"{loss_baseline.item():.2e}",
-                    "loss_rls": f"{loss_rls.item():.2e}",
-                }
-            )
 
 # Use STIX fonts (LaTeX-style) and apply them consistently
 plt.rcParams.update({
@@ -196,31 +202,62 @@ plt.rcParams.update({
 })
 
 # Plot the losses
-fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+fig1 = plt.figure(figsize=(3.5, 2.5))
 
-ax[0].plot(baseline_err_mean, label="Baseline")
-ax[0].fill_between(
-    range(len(baseline_err_mean)),
-    [x - y for x, y in zip(baseline_err_mean, baseline_err_std)],
-    [x + y for x, y in zip(baseline_err_mean, baseline_err_std)],
+plt.plot(node_err_med, label="NODE", color="#D62728")
+plt.fill_between(
+    range(len(node_err_med)),
+    node_err_10th,
+    node_err_90th,
     alpha=0.2,
     edgecolor='none',
     linewidth=0.0,
+    color="#D62728"
 )
-ax[0].plot(rls_err_mean, label="RLS")
-ax[0].fill_between(
-    range(len(rls_err_mean)),
-    [x - y for x, y in zip(rls_err_mean, rls_err_std)],
-    [x + y for x, y in zip(rls_err_mean, rls_err_std)],
+
+plt.plot(baseline_err_med, label="FE", color="#1F77B4")
+plt.fill_between(
+    range(len(baseline_err_med)),
+    baseline_err_10th,
+    baseline_err_90th,
     alpha=0.2,
     edgecolor='none',
     linewidth=0.0,
+    color="#1F77B4"
 )
-ax[0].set_xlabel("Lookahead Steps")
-ax[0].set_ylabel("Single Step Mean Prediction Error")
 
-ax[1].plot(parameter_estimate_norms)
-ax[1].fill_between(
+plt.plot(rls_err_med, label="FE-RLS", color="#2ca02c")
+plt.fill_between(
+    range(len(rls_err_med)),
+    rls_err_10th,
+    rls_err_90th,
+    alpha=0.2,
+    edgecolor='none',
+    linewidth=0.0,
+    color="#2ca02c"
+)
+
+plt.yscale("log")
+plt.xlabel("Time Steps")
+plt.ylabel("Single Step Mean Prediction Error")
+
+fig1.legend(
+    loc="outside upper center",
+    bbox_to_anchor=(0.5, 1.05),
+    ncol=3,
+    frameon=False,
+)
+
+plt.tight_layout()
+plt.savefig(f"plots/rls_one_terrain/scene={scene}", bbox_inches="tight", dpi=300)
+plt.close()
+# plt.show()
+
+
+fig2, ax2 = plt.subplots(figsize=(3.5,2.5))
+
+ax2.plot(parameter_estimate_norms)
+ax2.fill_between(
     range(len(parameter_estimate_stds)),
     [x - y for x, y in zip(parameter_estimate_norms, parameter_estimate_stds)],
     [x + y for x, y in zip(parameter_estimate_norms, parameter_estimate_stds)],
@@ -228,12 +265,9 @@ ax[1].fill_between(
     edgecolor='none',
     linewidth=0.0,
 )
-ax[1].set_xlabel("Lookahead Steps")
-ax[1].set_ylabel("Norm of Coeff. Error (RLS - Baseline)")
-
-ax[0].legend()
-
-plt.tight_layout()
-# plt.savefig(f"offline_rls_scene={scene}_forgetting=0_95.png", bbox_inches="tight", dpi=300)
-# plt.close()
-plt.show()
+ax2.set_xlabel("Time Steps")
+ax2.set_ylabel("Normed Coeffecient Error")
+fig2.tight_layout()
+plt.savefig(f"plots/rls_one_terrain/scene={scene}_coeffs", bbox_inches="tight", dpi=300)
+plt.close()
+# plt.show()
