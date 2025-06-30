@@ -1,3 +1,10 @@
+"""
+FE initialized with coefficients from scene A data. 
+Deploy the model on scene A. 
+Change the dynamics to scene B.
+Update the coefficients using RLS and sequential data from B. 
+"""
+
 import torch
 from torch.utils.data import DataLoader
 
@@ -84,7 +91,8 @@ for idx in all_scenes:
     scene_inputs[idx], scene_targets[idx] = scene_data[key]
 
 # Choose the evaluation scene
-scene = 7 # Only one scene for now
+scene = 5 # Only one scene for now
+scene2 = 1
 
 # Create a dataset for testing prediction errors. 
 batch_size = 200
@@ -92,6 +100,12 @@ scene_input, scene_target = scene_inputs[scene], scene_targets[scene]
 dataset = kStepTestDataset([scene_input], [scene_target], n_example_points=1000)
 dataloader = DataLoader(dataset,batch_size=batch_size)
 dataloader_iter = iter(dataloader)
+
+scene_input2, scene_target2 = scene_inputs[scene2], scene_targets[scene2]
+dataset2 = kStepTestDataset([scene_input2], [scene_target2], n_example_points=1000)
+dataloader2 = DataLoader(dataset2,batch_size=batch_size)
+dataloader_iter2 = iter(dataloader2)
+
 
 # Load the model.
 n_basis = 8 
@@ -108,10 +122,7 @@ node_model.eval()
 model.eval()
 with torch.no_grad():
 
-    # Initialize the coefficients, matching an assumed batch size of 1
-    coefficients = torch.zeros(batch_size, n_basis, device=device)
-    P = torch.eye(n_basis, device=device).repeat(batch_size,1,1)#.unsqueeze(0)
-
+    # Allocate memory for error plotting.
     baseline_err_med = []
     baseline_err_10th = []
     baseline_err_90th = []
@@ -135,16 +146,36 @@ with torch.no_grad():
     u = u.to(device)
     y = y.to(device)
 
+    batch2 = next(dataloader_iter2)
+    x2, dt2, u2, y2, _, _, _ = batch2
+    x2 = x2.to(device)
+    dt2 = dt2.to(device)
+    u2 = u2.to(device)
+    y2 = y2.to(device)
+
+    # Initialize the coefficients using the first terrain.
+    coefficients, _ = model.compute_coefficients((torch.cat((x, u), dim=-1), dt), y)
+    P = torch.eye(n_basis, device=device).repeat(batch_size,1,1)#.unsqueeze(0)
+
     # Compute baseline coefficients
     coefficients_baseline, _ = model.compute_coefficients((torch.cat((x, u), dim=-1), dt), y)
 
+    coefficients_baseline2, _ = model.compute_coefficients((torch.cat((x2, u2), dim=-1), dt2), y2)
+
     with tqdm.trange(dt.shape[1]) as tqdm_bar:
         for step in tqdm_bar:
-            # slice relevant quantities at the current step
-            dt_step = dt[:, step].unsqueeze(1)#.unsqueeze(0)
-            y_step = y[:, step].unsqueeze(1)
-            x_step = x[:, step].unsqueeze(1)  # x is constant for the trajectory
-            u_step = u[:, step].unsqueeze(1)  # u is constant for the trajectory
+            if step < 50:
+                # slice relevant quantities at the current step
+                dt_step = dt[:, step].unsqueeze(1)#.unsqueeze(0)
+                y_step = y[:, step].unsqueeze(1)
+                x_step = x[:, step].unsqueeze(1)  # x is constant for the trajectory
+                u_step = u[:, step].unsqueeze(1)  # u is constant for the trajectory
+            else:
+                dt_step = dt2[:, step].unsqueeze(1)#.unsqueeze(0)
+                y_step = y2[:, step].unsqueeze(1)
+                x_step = x2[:, step].unsqueeze(1)  # x is constant for the trajectory
+                u_step = u2[:, step].unsqueeze(1)  # u is constant for the trajectory
+
 
             # Compute the basis functions 
             # [batch_size, n_points, n_features, n_basis]
@@ -162,7 +193,10 @@ with torch.no_grad():
 
 
             # Compute the baseline error
-            pred_baseline = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients_baseline)
+            if step < 50:
+                pred_baseline = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients_baseline)        
+            else:
+                pred_baseline = model((torch.cat((x_step, u_step), dim=-1), dt_step), coefficients=coefficients_baseline2)        
             loss_baseline = torch.nn.functional.mse_loss(pred_baseline, y_step)
 
             # Compute the recursive least squares prediction error
@@ -187,7 +221,7 @@ with torch.no_grad():
 
             parameter_estimate_norms.append((coefficients - coefficients_baseline).norm(dim=-1).mean().item())
             parameter_estimate_stds.append((coefficients - coefficients_baseline).norm(dim=-1).std().item())
-
+            
 
 # Use STIX fonts (LaTeX-style) and apply them consistently
 plt.rcParams.update({
@@ -249,7 +283,7 @@ fig1.legend(
 )
 
 plt.tight_layout()
-plt.savefig(f"plots/rls_one_terrain/scene={scene}", bbox_inches="tight", dpi=300)
+plt.savefig(f"plots/rls_two_terrains/scene={scene}_to_scene={scene2}", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
 
@@ -266,8 +300,8 @@ ax2.fill_between(
     linewidth=0.0,
 )
 ax2.set_xlabel("Time Steps")
-ax2.set_ylabel("Normed Coeffecient Error")
+ax2.set_ylabel("Normed Coefficient Error")
 fig2.tight_layout()
-plt.savefig(f"plots/rls_one_terrain/scene={scene}_coeffs", bbox_inches="tight", dpi=300)
+plt.savefig(f"plots/rls_two_terrains/scene={scene}_to_scene={scene2}_coeffs", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
