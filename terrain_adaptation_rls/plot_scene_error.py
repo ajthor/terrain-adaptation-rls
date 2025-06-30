@@ -32,8 +32,8 @@ else:
 
 n_basis = 8
 model_types = [
-    ("neural_ode", "logs/neural_ode/seed=42/neural_ode_model.pth"),
-    ("function_encoder", "logs/function_encoder/seed=42/function_encoder_model.pth"),
+    ("neural_ode", "logs/neural_ode/seed=0/neural_ode_model.pth"),
+    ("function_encoder", "logs/function_encoder/seed=0/function_encoder_model.pth"),
 ]
 seed = 42
 torch.manual_seed(seed)
