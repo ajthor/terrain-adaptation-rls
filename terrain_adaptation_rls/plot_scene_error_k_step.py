@@ -161,6 +161,8 @@ with torch.no_grad():
 
                 # Prepare the new current state. 
                 _x = torch.cat((torch.zeros((100,3), device=device), next_vel_B), dim=1)
+
+                # Predict the change in pose/heading and the NEXT velocity. 
                 pred = torch.cat((del_x[:,:3], next_vel_Bi), dim=1)
                 err_list.append(torch.norm(y[:,k,:] - pred, dim=-1))
 
@@ -192,26 +194,11 @@ for model_type in model_types:
     # Collect the errors for all seeds
     all_errors = np.array([all_results[model_type][seed] for seed in seeds])
     all_errors = all_errors.reshape(-1, all_errors.shape[2])
-    # mean_errors = np.mean(all_errors, axis=0)
 
     # Plot the accumulated errors from all seeds
     accum = np.cumsum(all_errors, axis=1)
-    # plt.plot(accum.T, color=colors[model_type], alpha=0.5, linewidth=0.25)
     # Plot the mean and median
     plt.plot(np.median(accum, axis=0), label=names[model_type], color=colors[model_type])
-    # plt.plot(np.median(accum, axis=0), color=colors[model_type], linestyle="--")
-    # Plot the standard deviation as a shaded area
-    # std_dev = np.std(accum, axis=0)
-    # plt.fill_between(
-    #     np.arange(accum.shape[1]),
-    #     np.clip(np.mean(accum, axis=0) - std_dev, 0, None),
-    #     np.mean(accum, axis=0) + std_dev,
-    #     alpha=0.2,
-    #     color=colors[model_type],
-    #     # turn off the boundary lines
-    #     edgecolor="none",
-    #     linewidth=0.0,
-    # )
     # Plot the first and third quartiles as a shaded area with dashed borders
     q1 = np.percentile(accum, 10, axis=0)
     q3 = np.percentile(accum, 90, axis=0)
@@ -221,7 +208,6 @@ for model_type in model_types:
         q3,
         alpha=0.2,
         color=colors[model_type], 
-        # hatch="///",
         edgecolor="none",
         linewidth=0.0,
     )
@@ -240,6 +226,6 @@ fig.legend(
 )
 
 plt.tight_layout()
-plt.savefig(f"scene_{scene}_error_k_step.png", bbox_inches="tight", dpi=300)
-plt.close()
-# plt.show()
+# plt.savefig(f"scene_{scene}_error_k_step.png", bbox_inches="tight", dpi=300)
+# plt.close()
+plt.show()
