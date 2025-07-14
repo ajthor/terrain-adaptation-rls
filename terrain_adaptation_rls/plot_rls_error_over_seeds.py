@@ -57,9 +57,9 @@ def plot_with_uncertainty(x_vals, data, label, color):
 
 device = get_device()
 n_basis = 8
-init_scene = 5
+init_scene = None
 eval_scene = 1
-max_steps = 200
+max_steps = 100
 seeds = list(range(10))
 model_types = ["neural_ode", "function_encoder"]
 
@@ -138,8 +138,8 @@ for mt in model_types:
 plot_with_uncertainty(x_vals, rls_results, names['rls'], colors['rls'])
 
 plt.yscale("log")
-plt.xlabel("Steps")
-plt.ylabel("Mean Absolute Error")
+plt.xlabel("Number of Time Steps")
+plt.ylabel("Mean Squared Error (MSE)")
 fig.legend(loc="outside upper center", bbox_to_anchor=(0.5, 1.05), ncol=3, frameon=False)
 plt.tight_layout()
 plt.savefig(f"rls_error_over_seeds_from_scene_{init_scene}_to_scene_{eval_scene}.png", bbox_inches="tight", dpi=300)
