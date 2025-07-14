@@ -240,6 +240,6 @@ fig.legend(
 )
 
 plt.tight_layout()
-plt.savefig(f"k_step_mse_scene_{scene}_median.png", bbox_inches="tight", dpi=300)
+plt.savefig(f"scene_{scene}_error_k_step.png", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
