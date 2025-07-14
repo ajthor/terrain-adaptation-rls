@@ -146,6 +146,6 @@ fig.legend(
 )
 
 plt.tight_layout()
-plt.savefig("scene_mean_errors_summary_new.png", bbox_inches="tight", dpi=300)
+plt.savefig("scene_error_over_seeds.png", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
