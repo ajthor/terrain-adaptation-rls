@@ -49,3 +49,12 @@ def loss_fn(model, batch, device):
     pred = model((xs, dt), coefficients=coefficients)
     loss = torch.nn.functional.mse_loss(pred, ys)
     return loss
+
+def rls_loss_fn(model, batch, coeffs, device):
+    xs, dt, ys, _, _, _ = batch
+    xs = xs.to(device)
+    dt = dt.to(device)
+    ys = ys.to(device)
+    pred = model((xs, dt), coefficients=coeffs)
+    loss = torch.nn.functional.mse_loss(pred, ys)
+    return loss
