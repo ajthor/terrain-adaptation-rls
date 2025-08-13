@@ -2,8 +2,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # === File paths for Scene 1 ===
-odom_path = "terrain_adaptation_rls/data/real_grass_odom.csv"
-cmd_path = "terrain_adaptation_rls/data/real_grass_cmd_vel.csv"
+path = "terrain_adaptation_rls/data/platform"
+terrain = "name"
+odom_path = f"{path}/{terrain}_odom.csv"
+cmd_path = f"{path}/{terrain}_cmd_vel.csv"
 # odom_path = "terrain_adaptation_rls/data_split/seed_0/scene_0/train_input.csv"
 # cmd_path = "terrain_adaptation_rls/data_split/seed_0/scene_0/train_input.csv"
 
@@ -11,12 +13,12 @@ cmd_path = "terrain_adaptation_rls/data/real_grass_cmd_vel.csv"
 odom_df = pd.read_csv(odom_path)
 cmd_df = pd.read_csv(cmd_path)
 
-# === Sort by time (assumed in first column) ===
-odom_df = odom_df.sort_values(by=odom_df.columns[0])
+# === Sort by time (assumed in second column) ===
+odom_df = odom_df.sort_values(by=odom_df.columns[1])
 cmd_df = cmd_df.sort_values(by=cmd_df.columns[0])
 
 # Extract time and relevant fields
-t_odom = odom_df.iloc[:, 0]
+t_odom = odom_df.iloc[:, 1]
 xVel = odom_df["xVel"] #[:, 4] 
 zAngVel = odom_df["zAngVel"] #[:,6] 
 
