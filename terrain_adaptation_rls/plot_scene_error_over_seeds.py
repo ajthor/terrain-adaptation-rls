@@ -33,17 +33,10 @@ n_basis = 8
 seeds = [0,1,2,3,4,5,6,7,8,9]
 model_types = ["neural_ode", "function_encoder"]
 
-scene_data = load_all_scenes()
 training_scenes = [0, 2, 3, 4, 6, 7]
 interpolation_scenes = [5]
 extrapolation_scenes = [1]
 all_scenes = training_scenes + interpolation_scenes + extrapolation_scenes
-
-# Preload all inputs/targets
-scene_inputs, scene_targets = {}, {}
-for idx in all_scenes:
-    key = f"scene{idx}"
-    scene_inputs[idx], scene_targets[idx] = scene_data[key]
 
 # Evaluate
 all_results = {model_type: {scene: [] for scene in all_scenes} for model_type in model_types}
@@ -51,26 +44,13 @@ all_results = {model_type: {scene: [] for scene in all_scenes} for model_type in
 for seed in seeds:
     torch.manual_seed(seed)
     
-    # TODO: Update this to use the pre-split data from scenes 1 and 5. 
-    # It doesn't matter right now because no models were trained on 1 and 5.
     for scene in all_scenes:
-        if scene == 5 or scene == 1:
-            scene_input, scene_target = scene_inputs[scene], scene_targets[scene]
-            total_points = scene_input.shape[0]
-            indices = torch.randperm(total_points)
-
-            # 80/20 train/test split
-            split_idx = int(0.8 * total_points)
-            test_indices = indices[split_idx:]
-            test_input = scene_input[test_indices]
-            test_target = scene_target[test_indices]
-        else:
-            # Train data was already split and saved from training.
-            load_path = f"terrain_adaptation_rls/data_split/seed_{seed}/scene_{scene}"
-            test_input_df = pd.read_csv(f"{load_path}/test_input.csv", header=None) 
-            test_target_df = pd.read_csv(f"{load_path}/test_target.csv", header=None) 
-            test_input = torch.tensor(test_input_df.values).float()
-            test_target = torch.tensor(test_target_df.values).float()
+        # Load pre-split data.
+        load_path = f"terrain_adaptation_rls/data_split/seed_{seed}/scene_{scene}"
+        test_input_df = pd.read_csv(f"{load_path}/test_input.csv", header=None) 
+        test_target_df = pd.read_csv(f"{load_path}/test_target.csv", header=None) 
+        test_input = torch.tensor(test_input_df.values).float()
+        test_target = torch.tensor(test_target_df.values).float()
 
         dataset = TestDataset([test_input], [test_target], n_example_points=100)
 
@@ -118,8 +98,6 @@ for model_type in model_types:
     min_ = np.min(all_errors, axis=0)
     max_ = np.max(all_errors, axis=0)
 
-    # Plot the errors from all seeds
-    # plt.plot(x_vals, all_errors.T, color=colors[model_type], alpha=0.5, linewidth=0.75)
     # Plot the median
     plt.plot(x_vals, med, label=names[model_type], marker=markers[model_type], color=colors[model_type])
     # Plot the min/max
