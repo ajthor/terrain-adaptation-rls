@@ -54,4 +54,5 @@ ax2.grid(True)
 ax2.legend(loc="upper right", fontsize=8)
 
 plt.tight_layout()
+# plt.savefig(f"{path}/{terrain}_over_time.png", bbox_inches="tight", dpi=300)
 plt.show()
