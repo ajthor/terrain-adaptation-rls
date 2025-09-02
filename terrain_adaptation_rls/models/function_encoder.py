@@ -5,7 +5,7 @@ from function_encoder.function_encoder import FunctionEncoder, BasisFunctions
 from .rk4 import rk4_step
 
 
-def create_model(device, n_basis=8):
+def create_model(device, n_basis=8, hidden_size=128):
     """
     Create a FunctionEncoder model instance.
     device: torch device string
@@ -15,7 +15,7 @@ def create_model(device, n_basis=8):
     def basis_factory():
         return NeuralODE(
             ode_func=ODEFunc(
-                model=MLP(layer_sizes=[9, 128, 128, 6], activation=torch.nn.ReLU())
+                model=MLP(layer_sizes=[9, hidden_size, hidden_size, 6], activation=torch.nn.ReLU())
             ),
             integrator=rk4_step,
         )
@@ -30,9 +30,9 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 
-def load_model(device, path, n_basis=8):
+def load_model(device, path, n_basis=8, hidden_size=128):
     """Load a FunctionEncoder model from a file."""
-    model = create_model(device, n_basis)
+    model = create_model(device, n_basis, hidden_size)
     model.load_state_dict(torch.load(path, map_location=device))
     return model
 
