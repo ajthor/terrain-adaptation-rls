@@ -28,9 +28,9 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 
-def load_model(device, path, n_basis=8):
+def load_model(device, path, n_basis=8, hidden_size=128):
     """Load a NeuralODE model from a file."""
-    model = create_model(device, n_basis)
+    model = create_model(device, n_basis, hidden_size)
     model.load_state_dict(torch.load(path, map_location=device))
     return model
 
