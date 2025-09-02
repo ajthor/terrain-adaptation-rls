@@ -245,7 +245,7 @@ def load_csv(filepath):
     return np.array(data)
 
 
-def load_all_scenes():
+def load_all_sim_scenes():
     """
     Loads and processes odom and cmd_vel data for all scenes.
     Returns a dictionary: {scene_idx: (inputs, targets)}
@@ -253,14 +253,14 @@ def load_all_scenes():
 
     data = {}
     for idx in range(8):
-        odom = load_csv(f"terrain_adaptation_rls/data/scene{idx}_odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/scene{idx}_cmd_vel.csv")
+        odom = load_csv(f"terrain_adaptation_rls/data/warthog_sim/scene{idx}/odom.csv")
+        cmd_vel = load_csv(f"terrain_adaptation_rls/data/warthog_sim/scene{idx}/cmd_vel.csv")
         inputs, targets = process_data(odom, cmd_vel)
         data[f"scene{idx}"] = (inputs, targets)
     # plot_target_data(data)
     return data
 
-def load_scenes(scenes: List[int]):
+def load_sim_scenes(scenes: List[int], platform: str):
     """
     Loads and processes odom and cmd_vel data for specified scenes.
     Returns a dictionary: {scene_idx: (inputs, targets)}
@@ -268,23 +268,23 @@ def load_scenes(scenes: List[int]):
 
     data = {}
     for idx in scenes:
-        odom = load_csv(f"terrain_adaptation_rls/data/scene{idx}_odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/scene{idx}_cmd_vel.csv")
+        odom = load_csv(f"terrain_adaptation_rls/data/{platform}/scene{idx}/odom.csv")
+        cmd_vel = load_csv(f"terrain_adaptation_rls/data/{platform}/scene{idx}/cmd_vel.csv")
         inputs, targets = process_data(odom, cmd_vel)
         data[f"scene{idx}"] = (inputs, targets)
     # plot_target_data(data)
     return data
 
-def load_all_bluebonnet_scenes():
+def load_hardware_scenes(scenes: List[int], platform: str):
     """
     Loads and processes odom and cmd_vel data for all bluebonnet scenes.
     Returns a dictionary: {scene_idx: (inputs, targets)}
     """
 
     data = {}
-    for terrain in ['grass', 'gravel', 'gym-floor', 'mulch', 'ice1', 'ice2', 'ice4', 'ice5']:
-        odom = load_csv(f"terrain_adaptation_rls/data/bluebonnet/{terrain}_odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/bluebonnet/{terrain}_cmd_vel.csv")
+    for terrain in scenes:
+        odom = load_csv(f"terrain_adaptation_rls/data/{platform}/{terrain}/odom.csv")
+        cmd_vel = load_csv(f"terrain_adaptation_rls/data/{platform}/{terrain}/cmd_vel.csv")
         inputs, targets = process_data(odom, cmd_vel)
         data[f"{terrain}"] = (inputs, targets)
     # plot_target_data(data)
