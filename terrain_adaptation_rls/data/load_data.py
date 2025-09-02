@@ -275,6 +275,21 @@ def load_scenes(scenes: List[int]):
     # plot_target_data(data)
     return data
 
+def load_all_bluebonnet_scenes():
+    """
+    Loads and processes odom and cmd_vel data for all bluebonnet scenes.
+    Returns a dictionary: {scene_idx: (inputs, targets)}
+    """
+
+    data = {}
+    for terrain in ['grass', 'gravel', 'gym-floor', 'mulch', 'ice1', 'ice2', 'ice4', 'ice5']:
+        odom = load_csv(f"terrain_adaptation_rls/data/bluebonnet/{terrain}_odom.csv")
+        cmd_vel = load_csv(f"terrain_adaptation_rls/data/bluebonnet/{terrain}_cmd_vel.csv")
+        inputs, targets = process_data(odom, cmd_vel)
+        data[f"{terrain}"] = (inputs, targets)
+    # plot_target_data(data)
+    return data
+
 def plot_target_data(data):
     """
     Plot the target data for all scenes.

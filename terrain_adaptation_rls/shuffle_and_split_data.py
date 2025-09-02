@@ -1,7 +1,7 @@
 import csv
 import os
 import torch
-from data.load_data import load_all_scenes
+from data.load_data import load_all_scenes, load_all_bluebonnet_scenes
 
 # Write a torch tensor to a CSV file.
 def write_csv(path, tensor_data):
@@ -10,9 +10,16 @@ def write_csv(path, tensor_data):
         for row in tensor_data.tolist():
             writer.writerow(row)
 
+# Choose hardware or simulation.
+platform = 'bluebonnet'
+
 # Load all scene data as a dictionary
-scene_data = load_all_scenes()
-all_scenes = [0, 1, 2, 3, 4, 5, 6, 7]
+if platform == 'sim':
+    scene_data = load_all_scenes()
+    scenes = [0, 1, 2, 3, 4, 5, 6, 7]
+elif platform == 'bluebonnet':
+    scene_data = load_all_bluebonnet_scenes()
+    scenes = ['grass', 'gravel', 'mulch']
 
 # Choose random seeds.
 seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
@@ -24,10 +31,14 @@ for seed in seeds:
     torch.manual_seed(seed)
 
     # Iterate over all scenes and split into train and test.
-    for scene_index in all_scenes:
+    for scene_index in scenes:
 
         # Extract the inputs and targets. 
-        scene_str = f"scene{scene_index}"
+        if platform == 'sim':
+            scene_str = f"scene{scene_index}"
+        elif platform == 'bluebonnet':
+            scene_str = f"{scene_index}"
+
         scene_input, scene_target = scene_data[scene_str]
 
         # Generate random indices to split the data.
@@ -46,7 +57,10 @@ for seed in seeds:
         test_target = scene_target[test_indices]
 
         # Save the data to CSV files
-        save_path = f"terrain_adaptation_rls/data_split/seed_{seed}/scene_{scene_index}"
+        if platform == 'sim':
+            save_path = f"terrain_adaptation_rls/data_split/seed_{seed}/scene{scene_index}"
+        elif platform == 'bluebonnet':
+            save_path = f"terrain_adaptation_rls/data_split/seed_{seed}/bluebonnet_{scene_index}"
         os.makedirs(save_path, exist_ok=True)
         write_csv(f"{save_path}/train_input.csv", train_input)
         write_csv(f"{save_path}/train_target.csv", train_target)
