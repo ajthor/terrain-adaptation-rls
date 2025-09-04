@@ -4,21 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from data.load_data import load_scenes, MultiRolloutDataset
 from train_utils import inertial_to_body, inertial_to_body_XL
+from plot_utils import load_model, format_fig
 from torch.utils.data import DataLoader
 from function_encoder.coefficients import recursive_least_squares_update
-
-
-def load_model(model_type, device, n_basis=8, path=None):
-    match model_type:
-        case "neural_ode":
-            from models.neural_ode import load_model, loss_fn
-            model = load_model(device=device, path=path, n_basis=n_basis).to(device)
-        case "function_encoder":
-            from models.function_encoder import load_model, loss_fn
-            model = load_model(device=device, path=path, n_basis=n_basis).to(device)
-        case _:
-            raise ValueError(f"Unknown model type: {model_type}")
-    return model, loss_fn
 
 
 # Device selection
@@ -39,11 +27,12 @@ seeds = list(range(10))
 model_types = ["function_encoder", "neural_ode"]  
 
 # Choose the evaluation scene
-scene = 1
-scene_data = load_scenes([scene])
+platform = 'warthog_sim'
+scene = 'scene5'
+scene_data = load_scenes([scene], platform)
 
 # Create a dataset for testing prediction errors. 
-scene_input, scene_target = scene_data[f'scene{scene}']
+scene_input, scene_target = scene_data[scene]
 dataset = MultiRolloutDataset(
     inputs=[scene_input],
     targets=[scene_target],
@@ -67,7 +56,7 @@ with torch.no_grad():
 
         for mt in model_types:
             # Load the model. 
-            model_path = f"logs/{mt}/seed={seed}/{mt}_model.pth"
+            model_path = f"logs/{platform}/{mt}/seed={seed}/{mt}_model.pth"
             if not os.path.exists(model_path):
                 print(f"Missing: {model_path}")
                 exit()
@@ -105,7 +94,6 @@ with torch.no_grad():
                 
                 # Calculate and accumulate the error. 
                 pred = torch.cat((del_x[:,:,:3], next_vel_Bi), dim=-1)
-                # total_error += torch.nn.functional.mse_loss(pred, y_seq[:,:,k,:])
                 total_error += torch.norm(y_seq[:,:,k,:] - pred, dim=-1)
 
             # Save results from this model. 
@@ -113,13 +101,16 @@ with torch.no_grad():
 
         
         # Initialize the RLS problem.
-        model_path = f"logs/function_encoder/seed={seed}/function_encoder_model.pth"
+        model_path = f"logs/{platform}/function_encoder/seed={seed}/function_encoder_model.pth"
         rls_model, _ = load_model("function_encoder", device, n_basis, model_path)
         P = torch.eye(n_basis, device=device).repeat(1, 1, 1)
         coeffs = torch.zeros(batchsize, n_basis, device=device)
         rls_error = torch.zeros((batchsize, n_rollouts), device=device)
 
         for i in range(n_rollouts):
+
+            print(f"seed={seed}, rollout={i}")
+
             # Get the next point in the RLS update data.
             x_step = x0_seq[:, i, :].unsqueeze(1)
             u_step = u_seq[:, i, 0, :].unsqueeze(1)
@@ -135,8 +126,6 @@ with torch.no_grad():
 
             _x = x0_seq[:,i,:].clone()
             for k in range(k_steps):
-                
-                print(f"seed={seed}, rollout={i}, step={k}")
 
                 # Predict the next state and save the prediction. 
                 del_x = rls_model((torch.cat((_x.unsqueeze(1), u_seq[:,i,k,:].unsqueeze(1)), dim=-1),
@@ -166,22 +155,8 @@ with torch.no_grad():
 
 
 
-# Use STIX fonts (LaTeX-style) and apply them consistently
-plt.rcParams.update({
-    'font.family': 'STIXGeneral',
-    'mathtext.fontset': 'stix',
-    'font.size': 9,
-    'axes.labelsize': 9,
-    'axes.titlesize': 9,
-    'legend.fontsize': 9,
-    'xtick.labelsize': 9,
-    'ytick.labelsize': 9,
-})
-
 # Plotting
-fig = plt.figure(figsize=(3.5, 2.5))
-colors = {"neural_ode": "#D62728", "function_encoder": "#1F77B4", "rls": "#2ca02c"}
-names = {"neural_ode": "Neural ODE", "function_encoder": "Function Encoder", "rls": "FE-RLS"}
+fig, colors, names = format_fig()
 
 for mt in model_types + ["rls"]:
     # Collect the final accumulated errors from all seeds and all rollouts
@@ -217,6 +192,6 @@ fig.legend(
     frameon=False,
 )
 plt.tight_layout()
-plt.savefig(f"rls_error_k={k_steps}_step_scene_{scene}_log.png", bbox_inches="tight", dpi=300)
+plt.savefig(f"plots/warthog_sim/rls_error_k_step/k={k_steps}_{scene}.png", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
