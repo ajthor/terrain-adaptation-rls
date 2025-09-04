@@ -7,6 +7,7 @@ from train_utils import inertial_to_body, inertial_to_body_XL
 from plot_utils import load_model, format_fig
 from torch.utils.data import DataLoader
 from function_encoder.coefficients import recursive_least_squares_update
+from meta_learning.maml import adapt_model
 
 
 # Device selection
@@ -26,6 +27,10 @@ torch.manual_seed(30)
 seeds = list(range(10))
 model_types = ["function_encoder", "neural_ode"]  
 
+# Meta-learning hyperparameters
+inner_lr = 1e-2
+inner_steps = 5
+
 # Choose the evaluation scene
 platform = 'warthog_sim'
 scene = 'scene5'
@@ -44,16 +49,20 @@ dataloader = DataLoader(dataset, batch_size=batchsize)
 
 # Evaluate
 all_results = {mt: {seed: [] for seed in seeds} for mt in model_types}
-rls_results = {seed: [] for seed in seeds}
+# rls_results = {seed: [] for seed in seeds}
+adaptive_results = {mt: {seed: [] for seed in seeds} for mt in ['rls', 'maml']}
 
 
-with torch.no_grad():
-    for seed in seeds:
-        
-        x0_seq, dt_seq, u_seq, y_seq, ex_xs, ex_dt, ex_ys = next(iter(dataloader))
-        x0_seq, dt_seq, u_seq, y_seq = [t.to(device) for t in [x0_seq, dt_seq, u_seq, y_seq]]
-        ex_xs, ex_dt, ex_ys = [t.to(device) for t in [ex_xs, ex_dt, ex_ys]]
+# with torch.no_grad():
+for seed in seeds:
+    
+    # Get a batch of data.
+    x0_seq, dt_seq, u_seq, y_seq, ex_xs, ex_dt, ex_ys = next(iter(dataloader))
+    x0_seq, dt_seq, u_seq, y_seq = [t.to(device) for t in [x0_seq, dt_seq, u_seq, y_seq]]
+    ex_xs, ex_dt, ex_ys = [t.to(device) for t in [ex_xs, ex_dt, ex_ys]]
 
+    # Evaluate the baseline FE and NODE on the batched data.
+    with torch.no_grad():
         for mt in model_types:
             # Load the model. 
             model_path = f"logs/{platform}/{mt}/seed={seed}/{mt}_model.pth"
@@ -99,23 +108,36 @@ with torch.no_grad():
             # Save results from this model. 
             all_results[mt][seed] = total_error.cpu().numpy()
 
-        
-        # Initialize the RLS problem.
-        model_path = f"logs/{platform}/function_encoder/seed={seed}/function_encoder_model.pth"
-        rls_model, _ = load_model("function_encoder", device, n_basis, model_path)
+    
+    # Initialize the RLS problem.
+    model_path = f"logs/{platform}/function_encoder/seed={seed}/function_encoder_model.pth"
+    rls_model, _ = load_model("function_encoder", device, n_basis, model_path)
+    P = torch.eye(n_basis, device=device).repeat(1, 1, 1)
+    coeffs = torch.zeros(1, n_basis, device=device)
+    rls_error = torch.zeros(batchsize, n_rollouts, device=device)
+
+    # Initialize the MAML problem.
+    model_path = f"logs/{platform}/maml/seed={seed}/maml_model.pth"
+    maml_model, maml_loss_fn = load_model("maml", device, n_basis, model_path)
+    maml_error = torch.zeros(batchsize, n_rollouts, device=device)
+
+    for j in range(batchsize):
+
+        adapted_model = maml_model
+
+        # Reset the FE RLS problem.
         P = torch.eye(n_basis, device=device).repeat(1, 1, 1)
-        coeffs = torch.zeros(batchsize, n_basis, device=device)
-        rls_error = torch.zeros((batchsize, n_rollouts), device=device)
+        coeffs = torch.zeros(1, n_basis, device=device)
 
         for i in range(n_rollouts):
 
-            print(f"seed={seed}, rollout={i}")
+            print(f"seed={seed}, batch={j}, rollout={i}")
 
             # Get the next point in the RLS update data.
-            x_step = x0_seq[:, i, :].unsqueeze(1)
-            u_step = u_seq[:, i, 0, :].unsqueeze(1)
-            dt_step = dt_seq[:, i, 0].unsqueeze(1)
-            y_step = y_seq[:, i, 0, :].unsqueeze(1) - x_step
+            x_step = x0_seq[j, i, :].unsqueeze(0).unsqueeze(1)
+            u_step = u_seq[j, i, 0, :].unsqueeze(0).unsqueeze(1)
+            dt_step = dt_seq[j, i, 0].unsqueeze(0).unsqueeze(1)
+            y_step = y_seq[j, i, 0, :].unsqueeze(0).unsqueeze(1) - x_step
 
             # Compute new coeffs using RLS update. 
             g = rls_model.basis_functions((torch.cat((x_step, u_step), dim=-1), dt_step))
@@ -124,33 +146,56 @@ with torch.no_grad():
                 method='qr', g=g, y=y_step, P=L, coefficients=coeffs, forgetting_factor=0.95
             )
 
-            _x = x0_seq[:,i,:].clone()
-            for k in range(k_steps):
+            # Adapt the MAML model to the scene.
+            example_data = (torch.cat((x_step, u_step), dim=-1), dt_step, y_step)
+            adapted_model = adapt_model(
+                model=adapted_model,
+                example_data=example_data,
+                loss_fn=maml_loss_fn,
+                inner_lr=inner_lr,
+                inner_steps=inner_steps,
+            )
 
-                # Predict the next state and save the prediction. 
-                del_x = rls_model((torch.cat((_x.unsqueeze(1), u_seq[:,i,k,:].unsqueeze(1)), dim=-1),
-                                   dt_seq[:,i,k].unsqueeze(1)), coefficients=coeffs)
+            for mt in ['rls', 'maml']:
 
-                # Get the next velocity in the initial body frame.
-                next_vel_Bi = _x[:,3:6] + del_x[:,:,3:6].squeeze(1)
+                # Reset the initial condition for each model. 
+                _x = x0_seq[j,i,:].unsqueeze(0).clone()
+            
+                for k in range(k_steps):
 
-                # Transform the velocity back to the body frame.
-                next_vel_B = inertial_to_body(
-                    bIMat=del_x[:,:,:3].squeeze(1),
-                    xIMat=next_vel_Bi,
-                    device=device
-                )
+                    # Predict the next state and save the prediction. 
+                    if mt == 'rls':
+                        with torch.no_grad():
+                            del_x = rls_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
+                                                dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)), coefficients=coeffs)
+                    elif mt == 'maml':
+                        del_x = adapted_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
+                                                dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)))
 
-                # Prepare the new current state. 
-                _x = torch.cat((torch.zeros((batchsize, 3), device=device), next_vel_B), dim=-1)
+                    # Get the next velocity in the initial body frame.
+                    next_vel_Bi = _x[:,3:6] + del_x[:,:,3:6].squeeze(1)
 
-                # Calculate and accumulate the error. 
-                pred = torch.cat((del_x[:,:,:3].squeeze(1), next_vel_Bi), dim=-1)
-                # rls_error[:,i] += torch.nn.functional.mse_loss(pred, y_seq[:,i,k,:])
-                rls_error[:,i] += torch.norm(y_seq[:,i,k,:] - pred, dim=-1)
+                    # Transform the velocity back to the body frame.
+                    next_vel_B = inertial_to_body(
+                        bIMat=del_x[:,:,:3].squeeze(1),
+                        xIMat=next_vel_Bi,
+                        device=device
+                    )
 
-        # Save the results from this rollout.
-        rls_results[seed] = rls_error.cpu().numpy()
+                    # Prepare the new current state. 
+                    _x = torch.cat((torch.zeros((1, 3), device=device), next_vel_B), dim=-1)
+
+                    # Calculate and accumulate the error. 
+                    pred = torch.cat((del_x[:,:,:3].squeeze(1), next_vel_Bi), dim=-1)
+
+                    if mt == 'rls':
+                        rls_error[j, i] += torch.norm(y_seq[j,i,k,:].unsqueeze(0) - pred, dim=-1).squeeze(0)
+                    elif mt == 'maml':
+                        maml_error[j, i] += torch.norm(y_seq[j,i,k,:].unsqueeze(0) - pred, dim=-1).squeeze(0)
+
+    # Save the results from this rollout.
+    adaptive_results['rls'][seed] = rls_error.cpu().numpy()
+    adaptive_results['maml'][seed] = maml_error.cpu().detach().numpy()
 
 
 
@@ -158,10 +203,12 @@ with torch.no_grad():
 # Plotting
 fig, colors, names = format_fig()
 
-for mt in model_types + ["rls"]:
+for mt in model_types + ["rls", "maml"]:
     # Collect the final accumulated errors from all seeds and all rollouts
     if mt == "rls":
-        errors = np.concatenate([rls_results[seed] for seed in seeds], axis=0)
+        errors = np.concatenate([adaptive_results['rls'][seed] for seed in seeds], axis=0)
+    elif mt == "maml":
+        errors = np.concatenate([adaptive_results['maml'][seed] for seed in seeds], axis=0)
     else:
         errors = np.concatenate([all_results[mt][seed] for seed in seeds], axis=0)
 
@@ -188,10 +235,10 @@ plt.ylabel(f"Accumulated Rollout Error")
 fig.legend(
     loc="outside upper center",
     bbox_to_anchor=(0.5, 1.05),
-    ncol=3,
+    ncol=4,
     frameon=False,
 )
 plt.tight_layout()
-plt.savefig(f"plots/warthog_sim/rls_error_k_step/k={k_steps}_bs={batchsize}_{scene}.png", bbox_inches="tight", dpi=300)
+plt.savefig(f"plots/warthog_sim/rls_error_k_step_with_maml/k={k_steps}_bs={batchsize}_{scene}_single_maml_update.png", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
