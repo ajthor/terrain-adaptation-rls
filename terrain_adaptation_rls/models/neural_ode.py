@@ -5,7 +5,7 @@ from function_encoder.model.neural_ode import NeuralODE, ODEFunc
 from .rk4 import rk4_step
 
 
-def create_model(device, n_basis=8):
+def create_model(device, n_basis=8, hidden_size=128):
     """
     Create a NeuralODE model instance.
     device: torch device string
@@ -14,7 +14,7 @@ def create_model(device, n_basis=8):
     model = NeuralODE(
         ode_func=ODEFunc(
             model=MLP(
-                layer_sizes=[9, int(128 * sqrt(n_basis)), int(128 * sqrt(n_basis)), 6],
+                layer_sizes=[9, int(hidden_size * sqrt(n_basis)), int(hidden_size * sqrt(n_basis)), 6],
                 activation=torch.nn.ReLU(),
             )
         ),
@@ -28,9 +28,9 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 
-def load_model(device, path, n_basis=8):
+def load_model(device, path, n_basis=8, hidden_size=128):
     """Load a NeuralODE model from a file."""
-    model = create_model(device, n_basis)
+    model = create_model(device, n_basis, hidden_size)
     model.load_state_dict(torch.load(path, map_location=device))
     return model
 
