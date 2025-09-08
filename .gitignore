@@ -4,3 +4,4 @@ logs/
 .vscode/
 *.png
 *.egg-info
+data_processed/

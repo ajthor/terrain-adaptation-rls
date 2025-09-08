@@ -260,24 +260,10 @@ def load_all_sim_scenes():
     # plot_target_data(data)
     return data
 
-def load_sim_scenes(scenes: List[int], platform: str):
-    """
-    Loads and processes odom and cmd_vel data for specified scenes.
-    Returns a dictionary: {scene_idx: (inputs, targets)}
-    """
 
-    data = {}
-    for idx in scenes:
-        odom = load_csv(f"terrain_adaptation_rls/data/{platform}/scene{idx}/odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/{platform}/scene{idx}/cmd_vel.csv")
-        inputs, targets = process_data(odom, cmd_vel)
-        data[f"scene{idx}"] = (inputs, targets)
-    # plot_target_data(data)
-    return data
-
-def load_hardware_scenes(scenes: List[int], platform: str):
+def load_scenes(scenes: List[int], platform: str):
     """
-    Loads and processes odom and cmd_vel data for all bluebonnet scenes.
+    Loads and processes odom and cmd_vel data from a list of scenes.
     Returns a dictionary: {scene_idx: (inputs, targets)}
     """
 
