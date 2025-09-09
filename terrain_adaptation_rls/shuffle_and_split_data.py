@@ -1,7 +1,7 @@
 import csv
 import os
 import torch
-from data.load_data import load_all_sim_scenes, load_hardware_scenes
+from data.load_data import load_all_sim_scenes, load_scenes
 
 # Write a torch tensor to a CSV file.
 def write_csv(path, tensor_data):
@@ -11,15 +11,15 @@ def write_csv(path, tensor_data):
             writer.writerow(row)
 
 # Choose hardware or simulation.
-platform = 'bluebonnet'
+platform = 'jackal_0770'
 
 # Load all scene data as a dictionary
 if platform == 'warthog_sim':
     scene_data = load_all_sim_scenes()
     scenes = [0, 1, 2, 3, 4, 5, 6, 7]
 else:
-    scenes = ['grass', 'gravel', 'gym_floor', 'gym_floor_simple', 'ice1', 'ice2', 'ice4', 'ice5', 'mulch']
-    scene_data = load_hardware_scenes(scenes, platform)
+    scenes = ['short_bags/ice/2025-08-08-16-17-51']
+    scene_data = load_scenes(scenes, platform)
 
 # Choose random seeds.
 seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
