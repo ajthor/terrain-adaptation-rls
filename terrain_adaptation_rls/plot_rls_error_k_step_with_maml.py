@@ -1,4 +1,5 @@
 import os
+import csv
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,9 +21,10 @@ else:
 
 # Config
 n_basis = 8
-k_steps = 30
-n_rollouts = 100
-batchsize = 100
+hidden_size = 128
+k_steps = 15
+n_rollouts = 50
+batchsize = 30
 torch.manual_seed(30)
 seeds = list(range(10))
 model_types = ["function_encoder", "neural_ode"]  
@@ -33,8 +35,9 @@ inner_steps = 5
 
 # Choose the evaluation scene
 platform = 'warthog_sim'
-scene = 'scene5'
+scene = 'scene1'
 scene_data = load_scenes([scene], platform)
+training_set = 'grass_gym_ice_mulch_pavement_turf'
 
 # Create a dataset for testing prediction errors. 
 scene_input, scene_target = scene_data[scene]
@@ -49,7 +52,6 @@ dataloader = DataLoader(dataset, batch_size=batchsize)
 
 # Evaluate
 all_results = {mt: {seed: [] for seed in seeds} for mt in model_types}
-# rls_results = {seed: [] for seed in seeds}
 adaptive_results = {mt: {seed: [] for seed in seeds} for mt in ['rls', 'maml']}
 
 
@@ -69,7 +71,7 @@ for seed in seeds:
             if not os.path.exists(model_path):
                 print(f"Missing: {model_path}")
                 exit()
-            model, loss_fn = load_model(mt, device, n_basis, model_path)
+            model, loss_fn = load_model(mt, device, n_basis, model_path, hidden_size)
 
             if mt == "function_encoder":
                 # Compute the basis coefficients
@@ -111,14 +113,14 @@ for seed in seeds:
     
     # Initialize the RLS problem.
     model_path = f"logs/{platform}/function_encoder/seed={seed}/function_encoder_model.pth"
-    rls_model, _ = load_model("function_encoder", device, n_basis, model_path)
+    rls_model, _ = load_model("function_encoder", device, n_basis, model_path, hidden_size)
     P = torch.eye(n_basis, device=device).repeat(1, 1, 1)
     coeffs = torch.zeros(1, n_basis, device=device)
     rls_error = torch.zeros(batchsize, n_rollouts, device=device)
 
     # Initialize the MAML problem.
     model_path = f"logs/{platform}/maml/seed={seed}/maml_model.pth"
-    maml_model, maml_loss_fn = load_model("maml", device, n_basis, model_path)
+    maml_model, maml_loss_fn = load_model("maml", device, n_basis, model_path, hidden_size)
     maml_error = torch.zeros(batchsize, n_rollouts, device=device)
 
     for j in range(batchsize):
@@ -202,6 +204,8 @@ for seed in seeds:
 
 # Plotting
 fig, colors, names = format_fig()
+save_path = f"plots/{platform}/rls_error_k_step_with_maml/{scene}_k={k_steps}_bs={batchsize}_inner_steps={inner_steps}"
+os.makedirs(save_path, exist_ok=True)
 
 for mt in model_types + ["rls", "maml"]:
     # Collect the final accumulated errors from all seeds and all rollouts
@@ -214,20 +218,28 @@ for mt in model_types + ["rls", "maml"]:
 
     # Compute statistics
     med = np.median(errors, axis=0)
-    _min = np.percentile(errors, 10, axis=0)
-    _max = np.percentile(errors, 90, axis=0)
+    p10 = np.percentile(errors, 10, axis=0)
+    p90 = np.percentile(errors, 90, axis=0)
 
     # Plot median, min, and max. 
     plt.plot(med, label=names[mt], color=colors[mt])
     plt.fill_between(
         np.arange(n_rollouts),
-        _min,
-        _max,
+        p10,
+        p90,
         alpha=0.2,
         color=colors[mt],
         edgecolor="none",
         linewidth=0.0,
     )
+
+    # Save data to a CSV file.
+    csv_file = os.path.join(save_path, f"{mt}_errors.csv")
+    with open(csv_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["timestep", "median", "p10", "p90"])
+        for t, m, lo, hi in zip(np.arange(n_rollouts), med, p10, p90):
+            writer.writerow([t, m, lo, hi])
 
 plt.yscale("log")
 plt.xlabel("Number of Time Steps")
@@ -239,6 +251,9 @@ fig.legend(
     frameon=False,
 )
 plt.tight_layout()
-plt.savefig(f"plots/warthog_sim/rls_error_k_step_with_maml/k={k_steps}_bs={batchsize}_{scene}_single_maml_update.png", bbox_inches="tight", dpi=300)
+
+# Save the plot
+plot_file = os.path.join(save_path, f"plot.png")
+plt.savefig(plot_file, bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
