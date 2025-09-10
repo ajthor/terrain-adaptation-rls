@@ -175,6 +175,66 @@ class MultiRolloutDataset(IterableDataset):
 
             yield x0_seq, dt_seq, u_seq, y_seq, example_xs, example_dt, example_ys
 
+
+class MultiRolloutFullBagDataset(IterableDataset):
+    def __init__(
+        self,
+        inputs: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        n_example_points: int,
+        k_steps: int,
+    ):
+        self.inputs = inputs
+        self.targets = targets
+        self.n_example_points = n_example_points
+        self.k_steps = k_steps
+
+    def __iter__(self):
+        while True:
+            # Input/output tensors
+            input_data = self.inputs[0]
+            target_data = self.targets[0]
+
+            _xs = input_data[:, 1:]
+            _dt = target_data[:, 0] - input_data[:, 0]
+            _ys = target_data[:, 1:] - _xs[:, :6]
+
+            # Random example points for coeffs init
+            indices = torch.randperm(_xs.shape[0])
+            example_indices = indices[:self.n_example_points]
+            example_xs = _xs[example_indices, :]
+            example_dt = _dt[example_indices]
+            example_ys = _ys[example_indices, :]
+
+            # Slice sequential windows for each rollout
+            x0_seq = []     # initial state for each rollout
+            dt_seq = []     # timestep per rollout
+            u_seq = []      # control input per rollout
+            y_seq = []      # target next state per rollout
+
+            for n in range(_xs.shape[0] - self.k_steps):
+
+                # Initial state for this rollout
+                x0_n = input_data[n, 1:7]  # [pos, vel]
+                x0_seq.append(x0_n)
+
+                # Sequence of dt, u, y for this rollout
+                dt_n = _dt[n : n + self.k_steps]
+                u_n = _xs[n : n + self.k_steps, 6:]
+                y_n = target_data[n : n + self.k_steps, 1:]
+
+                dt_seq.append(dt_n)
+                u_seq.append(u_n)
+                y_seq.append(y_n)
+
+            # Stack into tensors: shape [N, k, ...]
+            x0_seq = torch.stack(x0_seq)          # [N, 6]
+            dt_seq = torch.stack(dt_seq)          # [N, k]
+            u_seq = torch.stack(u_seq)            # [N, k, 2]
+            y_seq = torch.stack(y_seq)            # [N, k, 6]
+
+            yield x0_seq, dt_seq, u_seq, y_seq, example_xs, example_dt, example_ys
+
 class OnlineTestDataset(Dataset):
     def __init__(
         self,

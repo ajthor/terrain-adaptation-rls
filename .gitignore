@@ -5,3 +5,5 @@ logs/
 *.png
 *.egg-info
 data_processed/
+plots/
+plots_old/
