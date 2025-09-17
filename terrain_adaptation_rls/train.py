@@ -28,7 +28,7 @@ def load_csv(filepath):
 
 # Parse command line arguments.
 args = argparse.ArgumentParser()
-args.add_argument("--seed", type=int, default=42)
+args.add_argument("--seed", type=int, default=0)
 args.add_argument("--model", type=str, default="function_encoder")
 args.add_argument("--n_basis", type=int, default=8)
 args.add_argument("--gradsteps", type=int, default=10000)
@@ -36,20 +36,22 @@ args.add_argument("--logdir", type=str, default="logs")
 args.add_argument("--device", type=str, default="cuda")
 args.add_argument("--platform", type=str, default="jackal_0770")
 args.add_argument("--hidden_size", type=int, default=128)
+args.add_argument("--inner_lr", type=float, default=1e-2)
+args.add_argument("--inner_steps", type=float, default=5)
 args = args.parse_args()
 
 # Create a personal logdir.
-args.logdir = f"{args.logdir}/{args.platform}/grass_gym_ice23-15/{args.model}/seed={args.seed}/hidden_size={args.hidden_size}/n_basis={args.n_basis}"
+args.logdir = f"{args.logdir}/{args.platform}/{args.model}/seed={args.seed}/hidden_size={args.hidden_size}/n_basis={args.n_basis}"
 
 # Seed the model.
 torch.manual_seed(args.seed)
 
 # Choose the scenes for training, interpolation, and extrapolation.
 if args.platform == 'jackal_0770':
-    training_scenes = ['grass', 'gym_floor', 'ice/2025-08-08-16-23-15']
-    interpolation_scenes = ['mulch']
-    extrapolation_scenes = ['sidewalk']
-elif args.platform == 'warthog_sim':
+    training_scenes = ['grass', 'gym_floor', 'ice', 'mulch', 'pavement', 'turf']
+    interpolation_scenes = ['short_bags/mulch']
+    extrapolation_scenes = ['short_bags/ice/2025-08-08-16-17-51']
+elif args.platform == 'warty':
     training_scenes = [f'scene{i}' for i in [0, 2, 3, 4, 6, 7]]
     interpolation_scenes = ['scene5']
     extrapolation_scenes = ['scene1']
@@ -131,10 +133,6 @@ match args.model:
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
 
-# Meta-learning hyperparameters
-inner_lr = 1e-2
-inner_steps = 5
-
 # Training loop
 training_data = {
     "training_loss": [],
@@ -159,8 +157,8 @@ with tqdm.trange(args.gradsteps) as tqdm_bar:
                 model=model,
                 query_data=query_data,
                 example_data=example_data,
-                inner_lr=inner_lr,
-                inner_steps=inner_steps,
+                inner_lr=args.inner_lr,
+                inner_steps=args.inner_steps,
                 loss_fn=loss_fn,
                 meta_optimizer=optimizer,
             )
