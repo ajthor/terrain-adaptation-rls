@@ -17,36 +17,29 @@ def quaternion_to_yaw(x, y, z, w):
     return yaw
 
 # === Paths ===
-ssd_path = "path/to/data"
-platform = "jackal_0770"
+ssd_path = "path/to/bag/file"
+platform = "warty"
 terrain = "terrain"
 bag_name = "bag_name"
-bag_file = f"{ssd_path}/{terrain}/{bag_name}.bag" 
+bag_file = f"{ssd_path}/{bag_name}.bag" 
 
 # Topics
-odom_topic = f"/{platform}/dlio/odom_body"
-cmd_topic = f"/{platform}/joy_teleop/cmd_vel"
+odom_topic = f"/warty/odom_processed_full2D"
+cmd_topic = f"/warty/cmd_vel"
+trigger_topic = f"/trigger_terrain_change"
 
 cmd_clean = []
 odom_clean = []
-earliest_time = None
+triggers = []
 
 with rosbag.Bag(bag_file, "r") as bag:
 
-    # === Step 1: find earliest timestamp ===
-    for topic, msg, t in bag.read_messages(topics=[odom_topic, cmd_topic]):
-        earliest_time = t.to_sec()
-        break
-
-    print(f"Reference time (first message in bag): {earliest_time}")
-
     # === Step 2: process messages relative to earliest timestamp ===
-    for topic, msg, t in bag.read_messages(topics=[odom_topic, cmd_topic]):
-        time_sec = t.to_sec() - earliest_time
+    for topic, msg, t in bag.read_messages(topics=[odom_topic, cmd_topic, trigger_topic]):
 
         if topic == cmd_topic:
             cmd_clean.append({
-                "Time": time_sec,
+                "Time": t.to_sec(),
                 "linear.x": msg.linear.x,
                 "linear.y": msg.linear.y,
                 "linear.z": msg.linear.z,
@@ -56,21 +49,21 @@ with rosbag.Bag(bag_file, "r") as bag:
             })
 
         elif topic == odom_topic:
-            qx = msg.pose.pose.orientation.x
-            qy = msg.pose.pose.orientation.y
-            qz = msg.pose.pose.orientation.z
-            qw = msg.pose.pose.orientation.w
-            yaw = quaternion_to_yaw(qx, qy, qz, qw)
-
             odom_clean.append({
-                "Time": time_sec,
-                "time": time_sec,
-                "xPos": msg.pose.pose.position.x,
-                "yPos": msg.pose.pose.position.y,
-                "yaw": yaw,
-                "xVel": msg.twist.twist.linear.x,
-                "yVel": msg.twist.twist.linear.y,
-                "zAngVel": msg.twist.twist.angular.z
+                "Time": msg.time,
+                "time": msg.time,
+                "xPos": msg.xPos,
+                "yPos": msg.yPos,
+                "yaw": msg.yaw,
+                "xVel": msg.xVel,
+                "yVel": msg.yVel,
+                "zAngVel": msg.zAngVel
+            })
+        
+        elif topic == trigger_topic:
+            triggers.append({
+                "Time": t.to_sec(),
+                "Scene": msg.data
             })
 
 # === Step 3: write CSVs ===
@@ -81,9 +74,11 @@ def write_csv(filepath, rows):
         writer.writerows(rows)
 
 data_path = f"/home/arl/terrain-adaptation-rls/terrain_adaptation_rls/data/{platform}"
-terrain_path = os.path.join(data_path, terrain)
+terrain_path = os.path.join(data_path, f'{terrain}/{bag_name}')
 os.makedirs(terrain_path, exist_ok=True)
 write_csv(os.path.join(terrain_path, "cmd_vel.csv"), cmd_clean)
 write_csv(os.path.join(terrain_path, "odom.csv"), odom_clean)
+write_csv(os.path.join(terrain_path, "triggers.csv"), triggers)
 
 print(f"Wrote {len(cmd_clean)} cmd_vel rows and {len(odom_clean)} odom rows.")
+print(f"Wrote {len(triggers)} trigger rows.")
