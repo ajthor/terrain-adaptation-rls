@@ -19,6 +19,14 @@ def test_eval(model, loss_fn, batch, device):
         loss = loss_fn(model, batch, device)
     return loss.item()
 
+def maml_test_eval(model, loss_fn, batch):
+    model.eval()
+    with torch.no_grad():
+        if len(batch[0].shape) == 2:
+            batch = [b.unsqueeze(0) for b in batch]
+        loss = loss_fn(model, batch)
+    return loss.item()
+
 def rls_test_eval(model, loss_fn, batch, coeffs, device):
     model.eval()
     with torch.no_grad():
