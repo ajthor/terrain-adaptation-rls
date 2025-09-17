@@ -10,56 +10,59 @@ def write_csv(path, tensor_data):
         for row in tensor_data.tolist():
             writer.writerow(row)
 
-# Choose hardware or simulation.
-platform = 'jackal_0770'
+# Choose the platforms to split.
+platforms = ["warty", "jackal_0770"]
 
-# Load all scene data as a dictionary
-if platform == 'warthog_sim':
-    scene_data = load_all_sim_scenes()
-    scenes = [0, 1, 2, 3, 4, 5, 6, 7]
-else:
-    scenes = ['short_bags/ice/2025-08-08-16-17-51']
-    scene_data = load_scenes(scenes, platform)
+# Loop over all platforms.
+for platform in platforms:
 
-# Choose random seeds.
-seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 42]
+    # Load all scene data as a dictionary
+    if platform == 'warty':
+        scene_data = load_all_sim_scenes()
+        scenes = [0, 1, 2, 3, 4, 5, 6, 7]
+    else:
+        scenes = ['grass', 'gym_floor', 'ice', 'mulch', 'pavement', 'turf']
+        scene_data = load_scenes(scenes, platform)
 
-# Create a directory to save the split data.
-for seed in seeds:
+    # Choose random seeds.
+    seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-    # Set the random seed. 
-    torch.manual_seed(seed)
+    # Create a directory to save the split data.
+    for seed in seeds:
 
-    # Iterate over all scenes and split into train and test.
-    for scene_index in scenes:
+        # Set the random seed. 
+        torch.manual_seed(seed)
 
-        # Extract the inputs and targets. 
-        if platform == 'warthog_sim':
-            scene_str = f"scene{scene_index}"
-        else:
-            scene_str = scene_index
+        # Iterate over all scenes and split into train and test.
+        for scene_index in scenes:
 
-        scene_input, scene_target = scene_data[scene_str]
+            # Extract the inputs and targets. 
+            if platform == 'warty':
+                scene_str = f"scene{scene_index}"
+            else:
+                scene_str = scene_index
 
-        # Generate random indices to split the data.
-        total_points = scene_input.shape[0]
-        indices = torch.randperm(total_points)
+            scene_input, scene_target = scene_data[scene_str]
 
-        # Get the split indices for 80% training and 20% testing.
-        split_idx = int(0.8 * total_points)
-        train_indices = indices[:split_idx]
-        test_indices = indices[split_idx:]
+            # Generate random indices to split the data.
+            total_points = scene_input.shape[0]
+            indices = torch.randperm(total_points)
 
-        # Split the data into train and test sets.
-        train_input = scene_input[train_indices]
-        train_target = scene_target[train_indices]
-        test_input = scene_input[test_indices]
-        test_target = scene_target[test_indices]
+            # Get the split indices for 80% training and 20% testing.
+            split_idx = int(0.8 * total_points)
+            train_indices = indices[:split_idx]
+            test_indices = indices[split_idx:]
 
-        # Save the data to CSV files
-        save_path = f"terrain_adaptation_rls/data_split/{platform}/seed_{seed}/{scene_str}"
-        os.makedirs(save_path, exist_ok=True)
-        write_csv(f"{save_path}/train_input.csv", train_input)
-        write_csv(f"{save_path}/train_target.csv", train_target)
-        write_csv(f"{save_path}/test_input.csv", test_input)
-        write_csv(f"{save_path}/test_target.csv", test_target)
+            # Split the data into train and test sets.
+            train_input = scene_input[train_indices]
+            train_target = scene_target[train_indices]
+            test_input = scene_input[test_indices]
+            test_target = scene_target[test_indices]
+
+            # Save the data to CSV files
+            save_path = f"terrain_adaptation_rls/data_split/{platform}/seed_{seed}/{scene_str}"
+            os.makedirs(save_path, exist_ok=True)
+            write_csv(f"{save_path}/train_input.csv", train_input)
+            write_csv(f"{save_path}/train_target.csv", train_target)
+            write_csv(f"{save_path}/test_input.csv", test_input)
+            write_csv(f"{save_path}/test_target.csv", test_target)

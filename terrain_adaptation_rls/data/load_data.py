@@ -313,8 +313,8 @@ def load_all_sim_scenes():
 
     data = {}
     for idx in range(8):
-        odom = load_csv(f"terrain_adaptation_rls/data/warthog_sim/scene{idx}/odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/warthog_sim/scene{idx}/cmd_vel.csv")
+        odom = load_csv(f"terrain_adaptation_rls/data/warty/scene{idx}/odom.csv")
+        cmd_vel = load_csv(f"terrain_adaptation_rls/data/warty/scene{idx}/cmd_vel.csv")
         inputs, targets = process_data(odom, cmd_vel)
         data[f"scene{idx}"] = (inputs, targets)
     # plot_target_data(data)
