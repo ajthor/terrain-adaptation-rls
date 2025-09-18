@@ -29,6 +29,7 @@ warty_scene_info = [
 ]
 jackal_0770_scene_info = [
     ('ice', "#00FBFF", 'Ice'),
+    ('pavement', "#202020", 'Pavement'),
     ('turf', "#FF0000", 'Turf'),
     ('grass', "#009E73", 'Grass'),  
     ('mulch', "#7D3F00", 'Mulch'),

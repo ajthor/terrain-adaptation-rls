@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from data.load_data import load_all_scenes, TestDataset
+from data.load_data import TestDataset
 from train_utils import test_eval
 
 
@@ -30,13 +30,20 @@ else:
 
 # Config
 n_basis = 8
-seeds = [0,1,2,3,4,5,6,7,8,9]
+hidden_size = 128
+platform = 'warty'
+seeds = [0,1,2,3,4]
 model_types = ["neural_ode", "function_encoder"]
 
-training_scenes = [0, 2, 3, 4, 6, 7]
-interpolation_scenes = [5]
-extrapolation_scenes = [1]
-all_scenes = training_scenes + interpolation_scenes + extrapolation_scenes
+if platform == 'warty':
+    training_scenes = ['scene0', 'scene2', 'scene3', 'scene4', 'scene6', 'scene7']
+    interpolation_scenes = ['scene5']
+    extrapolation_scenes = ['scene1']
+    all_scenes = training_scenes + interpolation_scenes + extrapolation_scenes
+if platform == 'jackal_0770':
+    training_scenes = ['grass', 'gym_floor', 'ice', 'mulch', 'pavement', 'turf']
+    all_scenes = training_scenes
+
 
 # Evaluate
 all_results = {model_type: {scene: [] for scene in all_scenes} for model_type in model_types}
@@ -46,7 +53,7 @@ for seed in seeds:
     
     for scene in all_scenes:
         # Load pre-split data.
-        load_path = f"terrain_adaptation_rls/data_split/seed_{seed}/scene_{scene}"
+        load_path = f"terrain_adaptation_rls/data_split/{platform}/seed_{seed}/{scene}"
         test_input_df = pd.read_csv(f"{load_path}/test_input.csv", header=None) 
         test_target_df = pd.read_csv(f"{load_path}/test_target.csv", header=None) 
         test_input = torch.tensor(test_input_df.values).float()
@@ -55,7 +62,7 @@ for seed in seeds:
         dataset = TestDataset([test_input], [test_target], n_example_points=100)
 
         for model_type in model_types:
-            model_path = f"logs/{model_type}/seed={seed}/{model_type}_model.pth"
+            model_path = f"logs/{platform}/{model_type}/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/{model_type}_model.pth"
             if not os.path.exists(model_path):
                 print(f"Skipping missing: {model_path}")
                 continue
@@ -66,9 +73,14 @@ for seed in seeds:
             all_results[model_type][scene].append(error)
 
 # Plotting
-order = [0, 6, 7, 2, 5, 3, 4, 1]
-scene_labels_ordered = [f"Scene {i}" for i in order]
-x_vals = [0, 0.25, 0.5, 0.75, 0.812, 0.875, 0.939, 1]
+if platform == 'warty':
+    order = ['scene0', 'scene6', 'scene7', 'scene2', 'scene5', 'scene3', 'scene4', 'scene1']
+    scene_labels_ordered = [f"Scene {i[-1]}" for i in order]
+    x_vals = [0, 0.25, 0.5, 0.75, 0.812, 0.875, 0.939, 1]
+elif platform == 'jackal_0770':
+    order = ['pavement', 'gym_floor', 'turf', 'grass', 'mulch',  'ice']
+    scene_labels_ordered = ['Pavement', 'Gym Floor', 'Turf', 'Grass', 'Mulch',  'Ice']
+    x_vals = [0, 0.5, 1.0, 1.5, 2.0, 2.5]
 
 # Use STIX fonts (LaTeX-style) and apply them consistently
 plt.rcParams.update({
@@ -124,6 +136,8 @@ fig.legend(
 )
 
 plt.tight_layout()
-plt.savefig("scene_error_over_seeds.png", bbox_inches="tight", dpi=300)
+save_path = f'plots/{platform}'
+os.makedirs(save_path, exist_ok=True)
+plt.savefig(f"{save_path}/scene_error_over_seeds.png", bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
