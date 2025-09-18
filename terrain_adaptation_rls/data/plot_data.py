@@ -1,41 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-import glob
 import os
-
-# --- Config: Scene order, labels, and colors (original order preserved) ---
-scene_info = [
-    (1, '#1a1a1a', 'Scene 1'),  # darkest gray
-    (4, '#404040', 'Scene 4'),
-    (3, '#666666', 'Scene 3'),
-    (5, '#7f7f7f', 'Scene 5'),
-    (2, '#999999', 'Scene 2'),
-    (7, '#b3b3b3', 'Scene 7'),
-    (6, '#cccccc', 'Scene 6'),
-    (0, '#e6e6e6', 'Scene 0'),  # lightest gray
-]
-
-# --- Load data ---
-odom_dfs = []
-cmdvel_dfs = []
-path = 'terrain_adaptation_rls/data'
-for scene_id, _, _ in scene_info:
-    odom_dfs.append(pd.read_csv(f"{path}/scene{scene_id}_odom.csv"))
-    cmdvel_dfs.append(pd.read_csv(f"{path}/scene{scene_id}_cmd_vel.csv"))
-
-# --- Load real terrain CSVs ---
-real_colors = {
-    'grass': '#009E73',
-    'gravel': '#E69F00',
-    'mulch': '#0072B2',
-    'ahg-gym': "#FF0000",
-}
-real_odom_dfs = []  # list of (df, color, label)
-for terrain in ['grass', 'gravel', 'mulch','ahg-gym',]:
-    for file in sorted(glob.glob(os.path.join(path, f"real_{terrain}_odom.csv"))):
-        df = pd.read_csv(file)
-        label = f"Real {terrain.capitalize()}"
-        real_odom_dfs.append((df, real_colors[terrain], label))
 
 # --- Styling ---
 plt.rcParams.update({
@@ -51,19 +16,51 @@ plt.rcParams.update({
 marker_size = 0.1
 lbl_fs = tick_fs = 8
 
-# --- Plot odometry scatter plots ---
-# limits for plotting just real data.
-xLims = [-2,2]
-yLims = [-1.5, 1.5]
-angLims = [-3.5, 3.7]
-# limits for plotting just sim data. 
-xLims = [-3, 5.2]
-yLims = [-4, 3.8]
-angLims = [-2.8, 2.5]
-# limits for plotting real and sim data. 
-xLims = [-3, 5.2]
-yLims = [-4, 3.8]
-angLims = [-3.5, 3.7]
+# --- Config: Scene order, labels, and colors ---
+warty_scene_info = [
+    ('scene1', "#c447a4", 'Scene 1'), 
+    ('scene4', "#56CAFF", 'Scene 4'),
+    ('scene3', "#E5CE1E", 'Scene 3'),
+    ('scene5', "#a63dd0", 'Scene 5'),
+    ('scene2', "#EB0505", 'Scene 2'),
+    ('scene7', "#11b00b", 'Scene 7'),
+    ('scene6', "#ff8a24", 'Scene 6'),
+    ('scene0', "#1f66ff", 'Scene 0'),  
+]
+jackal_0770_scene_info = [
+    ('ice', "#00FBFF", 'Ice'),
+    ('turf', "#FF0000", 'Turf'),
+    ('grass', "#009E73", 'Grass'),  
+    ('mulch', "#7D3F00", 'Mulch'),
+    ('gym_floor', "#FFB700", 'Gym Floor'),
+]
+
+# --- Load data ---
+odom_dfs = []
+cmdvel_dfs = []
+platform = 'jackal_0770'
+path = f'terrain_adaptation_rls/data/{platform}'
+
+if platform == 'warty':
+    scene_info = warty_scene_info
+elif platform == 'jackal_0770':
+    scene_info = jackal_0770_scene_info
+
+for scene_id, _, _ in scene_info:
+    odom_dfs.append(pd.read_csv(f"{path}/{scene_id}/odom.csv"))
+    cmdvel_dfs.append(pd.read_csv(f"{path}/{scene_id}/cmd_vel.csv"))
+
+
+# --- Plot odometry scatter plots --- 
+if platform == 'warty':
+    xLims = [-3, 5.2]
+    yLims = [-4, 3.8]
+    angLims = [-2.8, 2.5]
+elif platform == 'jackal_0770':
+    xLims = [-2, 2.5]
+    yLims = [-2, 2]
+    angLims = [-3.5, 3]
+    
 
 fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(7.05, 2), sharex=False, sharey=False)
 plot_specs = [
@@ -76,9 +73,6 @@ for ax, (xk, yk, xlabel, ylabel, xlim, ylim) in zip(axes, plot_specs):
     # Simulated scenes
     for df, (_, color, label) in zip(odom_dfs, scene_info):
         ax.scatter(df[xk], df[yk], s=marker_size, color=color, marker='o', label=label if (xk, yk) == ('xVel', 'yVel') else None)
-    # Real terrain data
-    for df, color, label in real_odom_dfs:
-        ax.scatter(df[xk], df[yk], s=marker_size*0.1, color=color, marker='o', label=label if (xk, yk) == ('xVel', 'yVel') else None)
     
     ax.set_xlabel(xlabel, fontsize=lbl_fs)
     ax.set_ylabel(ylabel, fontsize=lbl_fs)
@@ -87,69 +81,21 @@ for ax, (xk, yk, xlabel, ylabel, xlim, ylim) in zip(axes, plot_specs):
     ax.tick_params(labelsize=tick_fs)
     ax.grid(False)
 
-# --- Show only real scene labels in the legend ---
+# --- Create legend ---
 handles, labels = axes[0].get_legend_handles_labels()
-
-# Filter to only include labels with "Real"
-real_handles_labels = [(h, l) for h, l in zip(handles, labels) if "Real" in l]
-
-# Unzip into separate lists
-real_handles, real_labels = zip(*real_handles_labels)
-
 fig.legend(
-    real_handles,
-    real_labels,
+    handles,
+    labels,
     loc='upper center',
     bbox_to_anchor=(0.5, 1.05),
     fontsize=8,
-    ncol=len(real_labels),
+    ncol=len(labels),
     frameon=False,
     markerscale=20
 )
 
 plt.tight_layout(rect=[0, 0, 1, 0.97])
-# fig.savefig(f"{path}/velocity_scatter_with_real_and_better_control.png", dpi=300, bbox_inches='tight')
-# plt.close(fig)
-plt.show()
-
-# --- Plot cmd_vel scatter ---
-fig, ax = plt.subplots(figsize=(2.5, 2.5))
-
-# Simulated scenes
-for df, (_, color, label) in zip(cmdvel_dfs, scene_info):
-    df_sampled = df.sample(frac=0.25, random_state=42)
-    ax.scatter(df_sampled['linear.x'], df_sampled['angular.z'],
-               s=marker_size, color=color, marker='o', label=label)
-
-# Real terrains
-for terrain in ['ahg-gym', 'grass', 'gravel', 'mulch']:
-    real_cmd_path = os.path.join(path, f"real_{terrain}_cmd_vel.csv")
-    if os.path.exists(real_cmd_path):
-        df_real = pd.read_csv(real_cmd_path)
-        df_sampled = df_real.sample(frac=0.25, random_state=42)
-        ax.scatter(df_sampled['linear.x'], df_sampled['angular.z'],
-                   s=marker_size, color=real_colors[terrain], marker='o',
-                   label=f"Real {terrain.capitalize()}")
-
-ax.set_xlabel(r'Command $v_x$', fontsize=lbl_fs)
-ax.set_ylabel(r'Command $\omega_z$', fontsize=lbl_fs)
-ax.tick_params(labelsize=tick_fs)
-ax.grid(False)
-
-# Legend to the right
-handles, labels = ax.get_legend_handles_labels()
-fig.legend(
-    handles[::-1],
-    labels[::-1],
-    loc='center left',
-    bbox_to_anchor=(1.01, 0.5),
-    fontsize=8,
-    frameon=False,
-    markerscale=20,
-    ncol=1
-)
-
-plt.tight_layout(rect=[0, 0, 1, 0.97])
-# fig.savefig(f"{path}/cmd_vel_with_real.png", dpi=300, bbox_inches='tight')
-# plt.close(fig)
-plt.show()
+os.makedirs(path, exist_ok=True)
+fig.savefig(f"{path}/velocity_scatter.png", dpi=300, bbox_inches='tight')
+plt.close(fig)
+# plt.show()
