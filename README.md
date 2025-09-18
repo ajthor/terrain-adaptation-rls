@@ -23,11 +23,12 @@ for models trained over 10 random seeds.
 ```
 python3 terrain_adaptation/shuffle_and_split_data.py
 ```
+Note that there are three scripts for processing ROS bags in the `data` directory (extracting odometry and command velocity data). 
 
 ### Train FE, NODE, and MAML models.
 To train individual models, run
 ```
-python terrain_adaptation_rls/train.py
+python3 terrain_adaptation_rls/train.py
 ```
 Arguments:
 - `seed`: sets the random seed for training and chooses the pre-split training data
@@ -42,4 +43,10 @@ Arguments:
 To train FE, NODE, and MAML models on each platform, run
 ```
 ./train_all.sh
+```
+
+### Other plotting functions.
+To plot a velocity profiles of the terrain data, run
+```
+python3 terrain_adaptation_rls/plot_data.py
 ```
