@@ -12,7 +12,7 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from data.load_data import load_all_scenes
+from data.load_data import load_scenes
 from train_utils import inertial_to_body
 from torch.utils.data import IterableDataset
 from torch.utils.data import DataLoader
@@ -81,26 +81,20 @@ torch.manual_seed(30)
 seeds = [0,1,2,3,4,5,6,7,8,9]
 model_types = ["neural_ode", "function_encoder"]  
 
-scene_data = load_all_scenes()
-training_scenes = [0, 2, 3, 4, 6, 7]
-interpolation_scenes = [5]
-extrapolation_scenes = [1]
-all_scenes = [1]#interpolation_scenes #+ training_scenes + extrapolation_scenes
+platform = 'warty'
+idx = 1
+eval_scene = f"scene{idx}"
+scene_data = load_scenes([eval_scene], platform)
 
 # Preload all inputs/targets
 scene_inputs, scene_targets = {}, {}
-for idx in all_scenes:
-    key = f"scene{idx}"
-    scene_inputs[idx], scene_targets[idx] = scene_data[key]
+scene_inputs[idx], scene_targets[idx] = scene_data[eval_scene]
 
 # Evaluate
 all_results = {model_type: {seed: [] for seed in range(10)} for model_type in model_types}
 
-# Choose the evaluation scene
-scene = all_scenes[0]  # Only one scene for now
-
 # Create a dataset for testing prediction errors. 
-scene_input, scene_target = scene_inputs[scene], scene_targets[scene]
+scene_input, scene_target = scene_inputs[idx], scene_targets[idx]
 dataset = kStepTestDataset([scene_input], [scene_target], n_example_points=1000)
 dataloader = DataLoader(dataset,batch_size=100)
 dataloader_iter = iter(dataloader)
@@ -112,7 +106,7 @@ with torch.no_grad():
         # Repeat evaluation for each model type
         for model_type in model_types:
             # Load the model. 
-            model_path = f"logs/{model_type}/seed={seed}/{model_type}_model.pth"
+            model_path = f"logs/{platform}/{model_type}/seed={seed}/{model_type}_model.pth"
             if not os.path.exists(model_path):
                 print(f"Missing: {model_path}")
                 exit()
@@ -136,7 +130,6 @@ with torch.no_grad():
             
             # Make a copy of the current state for processing.
             _x = x0.clone()
-            # x_list = [_x]
             err_list = []
 
             # Loop over the k steps and predict the next state.
