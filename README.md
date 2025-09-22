@@ -74,7 +74,7 @@ python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial.py
 Note that the terrain changes were recorded to a 
 `triggers.csv` file, saved when collecting data in the Unity simulator. 
 
-#### Accumulated Single-Step Errors on Hardware
+#### Multi-Panel Accumulated Single-Step Errors on Hardware
 Evaluate the hardware trained models on four scenes: grass, gym floor, mulch, and ice. 
 For each terrain, run
 ```
@@ -82,10 +82,35 @@ python3 terrain_adaptation_rls/eval_rls_error_over_seeds_sequntial.py
 ```
 to generate the single-step and accumulated errors. Before running, set these parameters:
 - `inner_steps = 1`
-- `scene = short_bags/grass`, `short_bags/gym_floor`, `short_bags/ice`, OR `short_bags/mulch`
+- `scene = 'short_bags/grass'`, `'short_bags/gym_floor'`, `'short_bags/ice'`, OR `'short_bags/mulch'`
 - `ex_scene = 'grass'`, `'gym_floor'`, `'ice'`, OR `'mulch'`
 - `platform = 'jackal_0770'`
 
+Then, to plot the errors, run
+```
+python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_panel.py
+```
+
+#### Accumulated Single-Step Errors on Hardware (Changing Terrain)
+Evaluate the hardware trained models on a scene that changes between ice and turf (using
+hardware recorded during an autonomous mission at a local ice rink). Run
+```
+python3 terrain_adaptation_rls/eval_rls_error_over_seeds_sequntial.py
+```
+to generate the single-step and accumulated errors. Before running, set these parameters:
+- `inner_steps = 1`
+- `scene = 'ice_autonomy_11'`
+- `ex_scene = 'turf'`
+- `platform = 'jackal_0770'`
+
+Then, the plot the errors, run
+```
+python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_ice_autonomy_11.py
+```
+And to generate an animated version of this plot, run
+```
+python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_ice_autonomy_11_animated.py
+```
 
 
 ### Other plotting functions.
