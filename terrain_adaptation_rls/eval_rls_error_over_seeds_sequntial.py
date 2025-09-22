@@ -2,8 +2,8 @@ import csv
 import os
 import torch
 import numpy as np
-from plot_utils import load_model, format_fig
-from data.load_data import load_scenes, fullBagDataset, fullBagDatasetOnline
+from plot_utils import load_model
+from data.load_data import load_scenes, fullBagDatasetOnline
 from function_encoder.coefficients import recursive_least_squares_update
 from meta_learning.maml import adapt_model
 
@@ -25,7 +25,7 @@ model_types = ["function_encoder", "neural_ode", "rls", "maml"]
 
 # Meta-learning hyperparameters
 inner_lr = 1e-2
-inner_steps = 5 # for sim and 1 for hardware
+inner_steps = 5 # 5 for sim and 1 for hardware
 
 # Choose the evaluation scene
 scene = 'scene0_to_scene1'
