@@ -289,6 +289,117 @@ class OnlineTestDataset(Dataset):
         return xs, dt, ys, example_xs, example_dt, example_ys
 
 
+class kStepTestDataset(Dataset):
+    def __init__(
+        self,
+        inputs: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        traj_lenth: int,
+    ):
+        self.inputs = inputs
+        self.targets = targets
+        self.traj_length = traj_lenth
+
+    def __iter__(self):
+        while True:
+            # Traj length
+            traj_length = self.traj_length
+
+            init_pt = 0 #torch.randint(self.inputs[0].shape[0]-250, (1,)).item() 
+
+            _dt = self.targets[0][:, 0] - self.inputs[0][:, 0]
+
+            x = self.inputs[0][init_pt:init_pt+traj_length, 1:7]
+            dt = _dt[init_pt:init_pt+traj_length]
+            u = self.inputs[0][init_pt:init_pt+traj_length, 7:9]
+            y = self.targets[0][init_pt:init_pt+traj_length, 1:] - x
+
+            # also return the true time
+            t = self.inputs[0][init_pt:init_pt+traj_length, 0]
+
+            yield x, dt, u, y,  t
+
+
+class fullBagDataset(Dataset):
+    def __init__(
+        self,
+        inputs: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        n_example_points: int,
+    ):
+        self.inputs = inputs
+        self.targets = targets
+        self.n_example_points = n_example_points
+
+    def __len__(self):
+        return len(self.inputs)
+
+    def __getitem__(self, idx):
+        # Length of the current sample
+        n_points = self.inputs[idx].shape[0]
+
+        # Sample random points from the data without replacement
+        indices = torch.randperm(n_points) #self.inputs[idx].shape[0])
+        example_indices = indices[: self.n_example_points]
+
+        # Extract the data components
+        times = self.inputs[idx][:, 0]
+        xs = self.inputs[idx][:, 1:]
+        dt = self.targets[idx][:, 0] - self.inputs[idx][:, 0]
+        ys = self.targets[idx][:, 1:] - xs[:, :6]
+
+        # Sample random example data
+        example_xs = xs[example_indices]
+        example_dt = dt[example_indices]
+        example_ys = ys[example_indices]
+
+        return xs, dt, ys, example_xs, example_dt, example_ys, times
+    
+
+class fullBagDatasetOnline(Dataset):
+    def __init__(
+        self,
+        inputs: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        example_inputs: List[torch.Tensor],
+        example_targets: List[torch.Tensor],
+        n_example_points: int,
+    ):
+        self.inputs = inputs
+        self.targets = targets
+        self.example_inputs = example_inputs
+        self.example_targets = example_targets
+        self.n_example_points = n_example_points
+
+    def __len__(self):
+        return len(self.inputs)
+
+    def __getitem__(self, idx):
+        # Length of the current sample
+        n_points = self.example_inputs[idx].shape[0]
+
+        # Sample random points from the data without replacement
+        indices = torch.randperm(n_points) #self.inputs[idx].shape[0])
+        example_indices = indices[: self.n_example_points]
+
+        # Extract the example data components
+        ex_xs = self.example_inputs[idx][:, 1:]
+        ex_dt = self.example_targets[idx][:, 0] - self.example_inputs[idx][:, 0]
+        ex_ys = self.example_targets[idx][:, 1:] - ex_xs[:, :6]
+
+        # Sample random example data from the example scene
+        example_xs = ex_xs[example_indices]
+        example_dt = ex_dt[example_indices]
+        example_ys = ex_ys[example_indices]
+
+        # Extract the evaluation data components
+        times = self.inputs[idx][:, 0]
+        xs = self.inputs[idx][:, 1:]
+        dt = self.targets[idx][:, 0] - self.inputs[idx][:, 0]
+        ys = self.targets[idx][:, 1:] - xs[:, :6]
+
+        return xs, dt, ys, example_xs, example_dt, example_ys, times
+
 def load_csv(filepath):
     """
     Load a CSV file and return the data as a tensor.
