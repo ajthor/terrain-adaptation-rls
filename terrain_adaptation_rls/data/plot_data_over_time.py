@@ -2,12 +2,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # === File paths for Scene 1 ===
-path = "terrain_adaptation_rls/data/platform"
-terrain = "name"
-odom_path = f"{path}/{terrain}_odom.csv"
-cmd_path = f"{path}/{terrain}_cmd_vel.csv"
-# odom_path = "terrain_adaptation_rls/data_split/seed_0/scene_0/train_input.csv"
-# cmd_path = "terrain_adaptation_rls/data_split/seed_0/scene_0/train_input.csv"
+path = "terrain_adaptation_rls/data/jackal_0770"
+terrain = "ice"
+odom_path = f"{path}/{terrain}/odom.csv"
+cmd_path = f"{path}/{terrain}/cmd_vel.csv"
 
 # === Load data ===
 odom_df = pd.read_csv(odom_path)
