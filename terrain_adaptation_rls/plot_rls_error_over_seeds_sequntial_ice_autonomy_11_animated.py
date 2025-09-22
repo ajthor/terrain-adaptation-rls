@@ -2,7 +2,6 @@ import argparse
 import csv
 import os
 import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, FFMpegWriter
 from scipy.signal import savgol_filter
 from plot_utils import format_fig
@@ -10,18 +9,17 @@ from plot_utils import format_fig
 # Config
 model_types = ["maml", "rls"]
 platform = 'jackal_0770'
-training_set = 'grass_gym_ice_mulch_pavement_turf'
 
 # Parse command line arguments
 parser = argparse.ArgumentParser()
-parser.add_argument("--scene", type=str, default='ice_autonomy/11')
+parser.add_argument("--scene", type=str, default='ice_autonomy_11')
 parser.add_argument("--fps", type=int, default=8, help="Frames per second for MP4")
 args = parser.parse_args()
 
 # Plotting setup
 fig, colors, names = format_fig()
 fig.subplots_adjust(top=0.90, bottom=0.25, left=0.2)
-save_path = f"plots/{platform}/{training_set}/single_step_errors_over_full_scenes/{args.scene}"
+save_path = f"plots/{platform}/single_step_errors_over_full_scenes/{args.scene}"
 
 def smooth_log(y, window_length=31, polyorder=3):
     y_log = np.log(y)
@@ -100,8 +98,6 @@ def update(frame):
         ax.plot(t, med, label=names[mt], color=colors[mt])
         ax.fill_between(t, p10, p90, alpha=0.2, color=colors[mt])
 
-    # ax.legend(loc="upper right", frameon=False)
-    # plt.tight_layout()
     return ax
 
 # Number of frames = number of timesteps
@@ -110,7 +106,7 @@ n_frames = max(len(d["t"]) for d in all_data.values())
 ani = FuncAnimation(fig, update, frames=n_frames, interval=1000/args.fps, blit=False)
 
 # Save to MP4
-mp4_file = os.path.join(save_path, f"plot_animation_fixed_time_8fps_better2.mp4")
+mp4_file = os.path.join(save_path, f"plot.mp4")
 writer = FFMpegWriter(fps=args.fps, metadata={"artist": "ICRA Hero Plot"})
 ani.save(mp4_file, writer=writer, dpi=300)
 
