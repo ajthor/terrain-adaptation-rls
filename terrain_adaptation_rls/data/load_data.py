@@ -132,7 +132,7 @@ class MultiRolloutDataset(IterableDataset):
             total_window = self.k_steps + self.n_rollouts + 1  # +1 for final x0_n
 
             # Ensure we have enough space
-            start_idx = torch.randint(input_data.shape[0] - total_window, (1,)).item()
+            start_idx = torch.randint(100, input_data.shape[0] - total_window, (1,)).item()
 
             _xs = input_data[:, 1:]
             _dt = target_data[:, 0] - input_data[:, 0]
@@ -141,9 +141,9 @@ class MultiRolloutDataset(IterableDataset):
             # Random example points for coeffs init
             indices = torch.randperm(_xs.shape[0])
             example_indices = indices[:self.n_example_points]
-            example_xs = _xs[example_indices]
-            example_dt = _dt[example_indices]
-            example_ys = _ys[example_indices]
+            example_xs = _xs[start_idx - 100:start_idx, :]
+            example_dt = _dt[start_idx - 100:start_idx]
+            example_ys = _ys[start_idx - 100:start_idx, :]
 
             # Slice sequential windows for each rollout
             x0_seq = []     # initial state for each rollout

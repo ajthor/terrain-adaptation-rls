@@ -34,8 +34,8 @@ inner_lr = 1e-2
 inner_steps = 5
 
 # Choose the evaluation scene
-platform = 'warthog_sim'
-scene = 'scene1'
+platform = 'warty'
+scene = 'scene5'
 scene_data = load_scenes([scene], platform)
 training_set = 'grass_gym_ice_mulch_pavement_turf'
 
@@ -85,11 +85,27 @@ for seed in seeds:
             for k in range(k_steps):
 
                 # Predict the next state and save the prediction. 
-                if mt == "function_encoder":
+                if mt == "function_encoder":    
+                    # import time
+                    # start_time = time.perf_counter()
                     del_x = model((torch.cat((_x, u_seq[:,:,k,:]), dim=2), dt_seq[:,:,k]), coefficients=coefficients)
+                    # Record the end time
+                    # end_time = time.perf_counter()
+                    # # Calculate the elapsed time
+                    # elapsed_time = end_time - start_time
+                    # Print the result
+                    # print(f"Execution time: {elapsed_time:.6f} seconds")
                 elif mt == "neural_ode":
+                    import time
+                    start_time = time.perf_counter()
                     del_x = model((torch.cat((_x, u_seq[:,:,k,:]), dim=2), dt_seq[:,:,k]))
-
+                    # Record the end time
+                    end_time = time.perf_counter()
+                    # Calculate the elapsed time
+                    elapsed_time = end_time - start_time
+                    # Print the result
+                    print(f"Execution time: {elapsed_time:.6f} seconds")
+                
                 # Get the next velocity in the initial body frame.
                 next_vel_Bi = _x[:,:,3:6] + del_x[:,:,3:6]
 
@@ -171,9 +187,19 @@ for seed in seeds:
                             del_x = rls_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
                                                 dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)), coefficients=coeffs)
                     elif mt == 'maml':
+                        # Record the start time
+                        # import time
+                        # start_time = time.perf_counter()
                         del_x = adapted_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
                                                 dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)))
+                        # # Record the end time
+                        # end_time = time.perf_counter()
+                        # # Calculate the elapsed time
+                        # elapsed_time = end_time - start_time
+                        # # Print the result
+                        # print(f"Execution time: {elapsed_time:.6f} seconds")
 
+                        # print(time.time() - start_time)
                     # Get the next velocity in the initial body frame.
                     next_vel_Bi = _x[:,3:6] + del_x[:,:,3:6].squeeze(1)
 
@@ -253,7 +279,7 @@ fig.legend(
 plt.tight_layout()
 
 # Save the plot
-plot_file = os.path.join(save_path, f"plot.png")
+plot_file = os.path.join(save_path, f"plot_8pt.png")
 plt.savefig(plot_file, bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
