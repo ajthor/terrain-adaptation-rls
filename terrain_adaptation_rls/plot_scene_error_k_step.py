@@ -76,25 +76,25 @@ else:
 
 # Config
 n_basis = 8
+hidden_size = 128
 num_samples = 200
 torch.manual_seed(30)
-seeds = [0,1,2,3,4,5,6,7,8,9]
+seeds = [0,1,2,3,4]
 model_types = ["neural_ode", "function_encoder"]  
 
 platform = 'warty'
-idx = 1
-eval_scene = f"scene{idx}"
-scene_data = load_scenes([eval_scene], platform)
+scene = f"scene1"
+scene_data = load_scenes([scene], platform)
 
 # Preload all inputs/targets
 scene_inputs, scene_targets = {}, {}
-scene_inputs[idx], scene_targets[idx] = scene_data[eval_scene]
+scene_inputs[scene], scene_targets[scene] = scene_data[scene]
 
 # Evaluate
 all_results = {model_type: {seed: [] for seed in range(10)} for model_type in model_types}
 
 # Create a dataset for testing prediction errors. 
-scene_input, scene_target = scene_inputs[idx], scene_targets[idx]
+scene_input, scene_target = scene_inputs[scene], scene_targets[scene]
 dataset = kStepTestDataset([scene_input], [scene_target], n_example_points=1000)
 dataloader = DataLoader(dataset,batch_size=100)
 dataloader_iter = iter(dataloader)
@@ -106,7 +106,7 @@ with torch.no_grad():
         # Repeat evaluation for each model type
         for model_type in model_types:
             # Load the model. 
-            model_path = f"logs/{platform}/{model_type}/seed={seed}/{model_type}_model.pth"
+            model_path = f"logs/{platform}/{model_type}/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/{model_type}_model.pth"
             if not os.path.exists(model_path):
                 print(f"Missing: {model_path}")
                 exit()
@@ -219,6 +219,8 @@ fig.legend(
 )
 
 plt.tight_layout()
-# plt.savefig(f"scene_{scene}_error_k_step.png", bbox_inches="tight", dpi=300)
-# plt.close()
-plt.show()
+save_path = f'plots/{platform}'
+os.makedirs(save_path, exist_ok=True)
+plt.savefig(f"{save_path}/{scene}_error_k_step.png", bbox_inches="tight", dpi=300)
+plt.close()
+# plt.show()
