@@ -105,7 +105,7 @@ plt.tight_layout(rect=[0, 0, 1, 0.95])
 # Save
 outdir = f"plots/{platform}/accum_single_step_errors_over_full_scenes"
 os.makedirs(outdir, exist_ok=True)
-plot_file = os.path.join(outdir, "four_panel_short_bags_25s_labeled_8pt_short.png")
+plot_file = os.path.join(outdir, "four_panel_short.png")
 plt.savefig(plot_file, bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()
