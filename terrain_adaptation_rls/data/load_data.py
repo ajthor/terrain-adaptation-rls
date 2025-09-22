@@ -176,117 +176,117 @@ class MultiRolloutDataset(IterableDataset):
             yield x0_seq, dt_seq, u_seq, y_seq, example_xs, example_dt, example_ys
 
 
-class MultiRolloutFullBagDataset(IterableDataset):
-    def __init__(
-        self,
-        inputs: List[torch.Tensor],
-        targets: List[torch.Tensor],
-        n_example_points: int,
-        k_steps: int,
-    ):
-        self.inputs = inputs
-        self.targets = targets
-        self.n_example_points = n_example_points
-        self.k_steps = k_steps
+# class MultiRolloutFullBagDataset(IterableDataset):
+#     def __init__(
+#         self,
+#         inputs: List[torch.Tensor],
+#         targets: List[torch.Tensor],
+#         n_example_points: int,
+#         k_steps: int,
+#     ):
+#         self.inputs = inputs
+#         self.targets = targets
+#         self.n_example_points = n_example_points
+#         self.k_steps = k_steps
 
-    def __iter__(self):
-        while True:
-            # Input/output tensors
-            input_data = self.inputs[0]
-            target_data = self.targets[0]
+#     def __iter__(self):
+#         while True:
+#             # Input/output tensors
+#             input_data = self.inputs[0]
+#             target_data = self.targets[0]
 
-            _xs = input_data[:, 1:]
-            _dt = target_data[:, 0] - input_data[:, 0]
-            _ys = target_data[:, 1:] - _xs[:, :6]
+#             _xs = input_data[:, 1:]
+#             _dt = target_data[:, 0] - input_data[:, 0]
+#             _ys = target_data[:, 1:] - _xs[:, :6]
 
-            # Random example points for coeffs init
-            indices = torch.randperm(_xs.shape[0])
-            example_indices = indices[:self.n_example_points]
-            example_xs = _xs[example_indices, :]
-            example_dt = _dt[example_indices]
-            example_ys = _ys[example_indices, :]
+#             # Random example points for coeffs init
+#             indices = torch.randperm(_xs.shape[0])
+#             example_indices = indices[:self.n_example_points]
+#             example_xs = _xs[example_indices, :]
+#             example_dt = _dt[example_indices]
+#             example_ys = _ys[example_indices, :]
 
-            # Slice sequential windows for each rollout
-            x0_seq = []     # initial state for each rollout
-            dt_seq = []     # timestep per rollout
-            u_seq = []      # control input per rollout
-            y_seq = []      # target next state per rollout
+#             # Slice sequential windows for each rollout
+#             x0_seq = []     # initial state for each rollout
+#             dt_seq = []     # timestep per rollout
+#             u_seq = []      # control input per rollout
+#             y_seq = []      # target next state per rollout
 
-            for n in range(_xs.shape[0] - self.k_steps):
+#             for n in range(_xs.shape[0] - self.k_steps):
 
-                # Initial state for this rollout
-                x0_n = input_data[n, 1:7]  # [pos, vel]
-                x0_seq.append(x0_n)
+#                 # Initial state for this rollout
+#                 x0_n = input_data[n, 1:7]  # [pos, vel]
+#                 x0_seq.append(x0_n)
 
-                # Sequence of dt, u, y for this rollout
-                dt_n = _dt[n : n + self.k_steps]
-                u_n = _xs[n : n + self.k_steps, 6:]
-                y_n = target_data[n : n + self.k_steps, 1:]
+#                 # Sequence of dt, u, y for this rollout
+#                 dt_n = _dt[n : n + self.k_steps]
+#                 u_n = _xs[n : n + self.k_steps, 6:]
+#                 y_n = target_data[n : n + self.k_steps, 1:]
 
-                dt_seq.append(dt_n)
-                u_seq.append(u_n)
-                y_seq.append(y_n)
+#                 dt_seq.append(dt_n)
+#                 u_seq.append(u_n)
+#                 y_seq.append(y_n)
 
-            # Stack into tensors: shape [N, k, ...]
-            x0_seq = torch.stack(x0_seq)          # [N, 6]
-            dt_seq = torch.stack(dt_seq)          # [N, k]
-            u_seq = torch.stack(u_seq)            # [N, k, 2]
-            y_seq = torch.stack(y_seq)            # [N, k, 6]
+#             # Stack into tensors: shape [N, k, ...]
+#             x0_seq = torch.stack(x0_seq)          # [N, 6]
+#             dt_seq = torch.stack(dt_seq)          # [N, k]
+#             u_seq = torch.stack(u_seq)            # [N, k, 2]
+#             y_seq = torch.stack(y_seq)            # [N, k, 6]
 
-            yield x0_seq, dt_seq, u_seq, y_seq, example_xs, example_dt, example_ys
+#             yield x0_seq, dt_seq, u_seq, y_seq, example_xs, example_dt, example_ys
 
-class OnlineTestDataset(Dataset):
-    def __init__(
-        self,
-        inputs: List[torch.Tensor],
-        targets: List[torch.Tensor],
-        n_example_points: int,
-    ):
-        self.inputs = inputs
-        self.targets = targets
-        self.n_example_points = n_example_points
+# class OnlineTestDataset(Dataset):
+#     def __init__(
+#         self,
+#         inputs: List[torch.Tensor],
+#         targets: List[torch.Tensor],
+#         n_example_points: int,
+#     ):
+#         self.inputs = inputs
+#         self.targets = targets
+#         self.n_example_points = n_example_points
 
-    def __len__(self):
-        return sum(
-            t.shape[0] - self.n_example_points for t in self.targets
-        )  # total number of samples across all scenes
+#     def __len__(self):
+#         return sum(
+#             t.shape[0] - self.n_example_points for t in self.targets
+#         )  # total number of samples across all scenes
 
-    def __getitem__(self, idx):
-        # get the correct index in the correct dataset
-        lens = [t.shape[0] - self.n_example_points for t in self.targets]
-        dataset = 0
-        while(len(lens) > 0 and idx >= lens[0]):
-            idx -= lens[0]
-            lens = lens[1:]
-            dataset += 1
+#     def __getitem__(self, idx):
+#         # get the correct index in the correct dataset
+#         lens = [t.shape[0] - self.n_example_points for t in self.targets]
+#         dataset = 0
+#         while(len(lens) > 0 and idx >= lens[0]):
+#             idx -= lens[0]
+#             lens = lens[1:]
+#             dataset += 1
 
-        # get the correct dataset
-        ins = self.inputs[dataset]
-        tar = self.targets[dataset]
+#         # get the correct dataset
+#         ins = self.inputs[dataset]
+#         tar = self.targets[dataset]
 
 
-        # get this data
-        _xs = ins[idx:idx + self.n_example_points + 1, 1:]
-        _dt = (
-            tar[idx:idx + self.n_example_points + 1, 0] 
-            - ins[idx:idx + self.n_example_points + 1, 0]
-        )
-        _ys = tar[idx:idx + self.n_example_points + 1, 1:] - _xs[:, :6]
-        example_xs = _xs[:self.n_example_points]
-        example_dt = _dt[:self.n_example_points]
-        example_ys = _ys[:self.n_example_points]
-        xs = _xs[self.n_example_points:]
-        dt = _dt[self.n_example_points:]
-        ys = _ys[self.n_example_points:]
+#         # get this data
+#         _xs = ins[idx:idx + self.n_example_points + 1, 1:]
+#         _dt = (
+#             tar[idx:idx + self.n_example_points + 1, 0] 
+#             - ins[idx:idx + self.n_example_points + 1, 0]
+#         )
+#         _ys = tar[idx:idx + self.n_example_points + 1, 1:] - _xs[:, :6]
+#         example_xs = _xs[:self.n_example_points]
+#         example_dt = _dt[:self.n_example_points]
+#         example_ys = _ys[:self.n_example_points]
+#         xs = _xs[self.n_example_points:]
+#         dt = _dt[self.n_example_points:]
+#         ys = _ys[self.n_example_points:]
 
-        assert example_xs.shape == (self.n_example_points, 8)
-        assert example_dt.shape == (self.n_example_points,)
-        assert example_ys.shape == (self.n_example_points, 6)
-        assert xs.shape == (1, 8)
-        assert dt.shape == (1,)
-        assert ys.shape == (1, 6)
+#         assert example_xs.shape == (self.n_example_points, 8)
+#         assert example_dt.shape == (self.n_example_points,)
+#         assert example_ys.shape == (self.n_example_points, 6)
+#         assert xs.shape == (1, 8)
+#         assert dt.shape == (1,)
+#         assert ys.shape == (1, 6)
 
-        return xs, dt, ys, example_xs, example_dt, example_ys
+#         return xs, dt, ys, example_xs, example_dt, example_ys
 
 
 class kStepTestDataset(Dataset):
