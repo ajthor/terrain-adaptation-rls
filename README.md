@@ -46,8 +46,6 @@ To train FE, NODE, and MAML models on each platform, run
 ```
 
 ### Other plotting functions.
-To plot velocity profiles of the terrain data, run
-```
-python3 terrain_adaptation_rls/plot_data.py
-```
-To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_scene_error_over_seeds.py`.
+- To plot velocity profiles of the terrain data, use `terrain_adaptation_rls/plot_data.py`
+- To plot the velocities over time for a single terrain, use `terrain_adaptation_rls/plot_data_over_time.py`.
+- To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_scene_error_over_seeds.py`.
