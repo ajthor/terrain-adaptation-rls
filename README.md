@@ -45,7 +45,18 @@ To train FE, NODE, and MAML models on each platform, run
 ./train_all.sh
 ```
 
+### Evaluate Trained Models
+Evalute the simulation trained models on unseen data from an icy terrain (scene 1). Run 
+```
+python3 terrain_adaptation_rls/plot_rls_error_k_step_with_adaptation.py
+```
+to evaluate each model's prediction accuracy over k-step rollouts over time across a 
+batch of initial states across the dataset. This plot provides intuition about the 
+expected MPPI performance when using each model to generate trajectory rollouts. 
+
+
 ### Other plotting functions.
 - To plot velocity profiles of the terrain data, use `terrain_adaptation_rls/plot_data.py`
 - To plot the velocities over time for a single terrain, use `terrain_adaptation_rls/plot_data_over_time.py`.
 - To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_scene_error_over_seeds.py`.
+- To evaluate k-step predictive performance of the static models (FE and NODE) over one terrain, use `terrain_adaptation_rls/plot_scene_error_k_step.py`.
