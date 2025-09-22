@@ -26,7 +26,7 @@ k_steps = 15
 n_rollouts = 50
 batchsize = 30
 torch.manual_seed(30)
-seeds = list(range(10))
+seeds = list(range(5))
 model_types = ["function_encoder", "neural_ode"]  
 
 # Meta-learning hyperparameters
@@ -35,9 +35,8 @@ inner_steps = 5
 
 # Choose the evaluation scene
 platform = 'warty'
-scene = 'scene5'
+scene = 'scene1'
 scene_data = load_scenes([scene], platform)
-training_set = 'grass_gym_ice_mulch_pavement_turf'
 
 # Create a dataset for testing prediction errors. 
 scene_input, scene_target = scene_data[scene]
@@ -67,7 +66,7 @@ for seed in seeds:
     with torch.no_grad():
         for mt in model_types:
             # Load the model. 
-            model_path = f"logs/{platform}/{mt}/seed={seed}/{mt}_model.pth"
+            model_path = f"logs/{platform}/{mt}/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/{mt}_model.pth"
             if not os.path.exists(model_path):
                 print(f"Missing: {model_path}")
                 exit()
@@ -86,25 +85,9 @@ for seed in seeds:
 
                 # Predict the next state and save the prediction. 
                 if mt == "function_encoder":    
-                    # import time
-                    # start_time = time.perf_counter()
                     del_x = model((torch.cat((_x, u_seq[:,:,k,:]), dim=2), dt_seq[:,:,k]), coefficients=coefficients)
-                    # Record the end time
-                    # end_time = time.perf_counter()
-                    # # Calculate the elapsed time
-                    # elapsed_time = end_time - start_time
-                    # Print the result
-                    # print(f"Execution time: {elapsed_time:.6f} seconds")
                 elif mt == "neural_ode":
-                    import time
-                    start_time = time.perf_counter()
                     del_x = model((torch.cat((_x, u_seq[:,:,k,:]), dim=2), dt_seq[:,:,k]))
-                    # Record the end time
-                    end_time = time.perf_counter()
-                    # Calculate the elapsed time
-                    elapsed_time = end_time - start_time
-                    # Print the result
-                    print(f"Execution time: {elapsed_time:.6f} seconds")
                 
                 # Get the next velocity in the initial body frame.
                 next_vel_Bi = _x[:,:,3:6] + del_x[:,:,3:6]
@@ -128,14 +111,14 @@ for seed in seeds:
 
     
     # Initialize the RLS problem.
-    model_path = f"logs/{platform}/function_encoder/seed={seed}/function_encoder_model.pth"
+    model_path = f"logs/{platform}/function_encoder/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/function_encoder_model.pth"
     rls_model, _ = load_model("function_encoder", device, n_basis, model_path, hidden_size)
     P = torch.eye(n_basis, device=device).repeat(1, 1, 1)
     coeffs = torch.zeros(1, n_basis, device=device)
     rls_error = torch.zeros(batchsize, n_rollouts, device=device)
 
     # Initialize the MAML problem.
-    model_path = f"logs/{platform}/maml/seed={seed}/maml_model.pth"
+    model_path = f"logs/{platform}/maml/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/maml_model.pth"
     maml_model, maml_loss_fn = load_model("maml", device, n_basis, model_path, hidden_size)
     maml_error = torch.zeros(batchsize, n_rollouts, device=device)
 
@@ -187,19 +170,9 @@ for seed in seeds:
                             del_x = rls_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
                                                 dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)), coefficients=coeffs)
                     elif mt == 'maml':
-                        # Record the start time
-                        # import time
-                        # start_time = time.perf_counter()
                         del_x = adapted_model((torch.cat((_x.unsqueeze(1), u_seq[j,i,k,:].unsqueeze(0).unsqueeze(1)), dim=-1),
                                                 dt_seq[j,i,k].unsqueeze(0).unsqueeze(1)))
-                        # # Record the end time
-                        # end_time = time.perf_counter()
-                        # # Calculate the elapsed time
-                        # elapsed_time = end_time - start_time
-                        # # Print the result
-                        # print(f"Execution time: {elapsed_time:.6f} seconds")
 
-                        # print(time.time() - start_time)
                     # Get the next velocity in the initial body frame.
                     next_vel_Bi = _x[:,3:6] + del_x[:,:,3:6].squeeze(1)
 
