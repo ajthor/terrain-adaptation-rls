@@ -49,7 +49,7 @@ To train FE, NODE, and MAML models on each platform, run
 #### k-Step Errors in Simulation
 Evalute the simulation trained models on unseen data from an icy terrain (scene 1). Run 
 ```
-python3 terrain_adaptation_rls/plot_rls_error_k_step_with_adaptation.py
+python3 terrain_adaptation_rls/plot_error_k_step_with_adaptation.py
 ```
 to evaluate each model's prediction accuracy over k-step rollouts over time across a 
 batch of initial states across the dataset. This plot provides intuition about the 
@@ -59,7 +59,7 @@ expected MPPI performance when using each model to generate trajectory rollouts.
 Evaluate the simulation trained models on a scene that switches from ice (scene 1) to 
 pavement (scene 0) every 30 seconds. Run
 ```
-python3 terrain_adaptation_rls/eval_rls_error_over_seeds_sequntial.py
+python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
 ```
 to generate the single-step and accumulated errors. Before running, set these parameters:
 - `inner_steps = 5`
@@ -69,7 +69,7 @@ to generate the single-step and accumulated errors. Before running, set these pa
 
 Then, to plot the single-step errors, run
 ```
-python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial.py
+python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial.py
 ```
 Note that the terrain changes were recorded to a 
 `triggers.csv` file, saved when collecting data in the Unity simulator. 
@@ -78,7 +78,7 @@ Note that the terrain changes were recorded to a
 Evaluate the hardware trained models on four scenes: grass, gym floor, mulch, and ice. 
 For each terrain, run
 ```
-python3 terrain_adaptation_rls/eval_rls_error_over_seeds_sequntial.py
+python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
 ```
 to generate the single-step and accumulated errors. Before running, set these parameters:
 - `inner_steps = 1`
@@ -88,14 +88,14 @@ to generate the single-step and accumulated errors. Before running, set these pa
 
 Then, to plot the errors, run
 ```
-python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_panel.py
+python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_panel.py
 ```
 
 #### Accumulated Single-Step Errors on Hardware (Changing Terrain)
 Evaluate the hardware trained models on a scene that changes between ice and turf (using
 hardware recorded during an autonomous mission at a local ice rink). Run
 ```
-python3 terrain_adaptation_rls/eval_rls_error_over_seeds_sequntial.py
+python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
 ```
 to generate the single-step and accumulated errors. Before running, set these parameters:
 - `inner_steps = 1`
@@ -105,16 +105,16 @@ to generate the single-step and accumulated errors. Before running, set these pa
 
 Then, the plot the errors, run
 ```
-python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_ice_autonomy_11.py
+python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_ice_autonomy_11.py
 ```
 And to generate an animated version of this plot, run
 ```
-python3 terrain_adaptation_rls/plot_rls_error_over_seeds_sequntial_ice_autonomy_11_animated.py
+python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_ice_autonomy_11_animated.py
 ```
 
 
 ### Other plotting functions.
 - To plot velocity profiles of the terrain data, use `terrain_adaptation_rls/plot_data.py`
 - To plot the velocities over time for a single terrain, use `terrain_adaptation_rls/plot_data_over_time.py`.
-- To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_scene_error_over_seeds.py`.
-- To evaluate k-step predictive performance of the static models (FE and NODE) over one terrain, use `terrain_adaptation_rls/plot_scene_error_k_step.py`.
+- To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_error_over_seeds_all_scenes.py`.
+- To evaluate k-step predictive performance of the static models (FE and NODE) over one terrain, use `terrain_adaptation_rls/plot_error_k_step.py`.
