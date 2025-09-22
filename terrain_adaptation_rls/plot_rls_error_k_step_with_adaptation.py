@@ -252,7 +252,7 @@ fig.legend(
 plt.tight_layout()
 
 # Save the plot
-plot_file = os.path.join(save_path, f"plot_8pt.png")
+plot_file = os.path.join(save_path, f"plot.png")
 plt.savefig(plot_file, bbox_inches="tight", dpi=300)
 plt.close()
 # plt.show()

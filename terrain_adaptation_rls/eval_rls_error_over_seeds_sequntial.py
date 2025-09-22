@@ -17,28 +17,27 @@ else:
     device = "cpu"
 
 # Config
-n_basis = 3
-hidden_size = 16
+n_basis = 8
+hidden_size = 128
 torch.manual_seed(30)
-seeds = [42] #list(range(10))
+seeds = list(range(5))
 model_types = ["function_encoder", "neural_ode", "rls", "maml"]  
 
 # Meta-learning hyperparameters
 inner_lr = 1e-2
-inner_steps = 1 # 5 for sim and 1 for hardware
+inner_steps = 5 # for sim and 1 for hardware
 
 # Choose the evaluation scene
-scene = 'ice_autonomy/12'
-ex_scene = 'turf'
-platform = 'jackal_0770'
+scene = 'scene0_to_scene1'
+ex_scene = 'scene0'
+platform = 'warty'
 scene_data = load_scenes([scene], platform)
 ex_scene_data = load_scenes([ex_scene], platform)
-training_set = 'grass_gym_ice_mulch_pavement_turf'
 
 # Create a dataset for testing prediction errors. 
 scene_input, scene_target = scene_data[f'{scene}']
 ex_scene_input, ex_scene_target = ex_scene_data[ex_scene]
-dataset = fullBagDatasetOnline( # use fullBagDatasetOnline when you want FE to only have the first 100 points to tune coeffs. 
+dataset = fullBagDatasetOnline( 
     inputs=[scene_input],
     targets=[scene_target],
     example_inputs=[ex_scene_input],
@@ -64,8 +63,8 @@ for batch in dataset:
         print(f"Seed: {seed}")
         
         # Load the models.
-        fe_path = f"logs/{platform}/{training_set}/function_encoder/seed={seed}/n_basis={n_basis}/hidden_size={hidden_size}/function_encoder_model.pth"
-        node_path = f"logs/{platform}/{training_set}/neural_ode/seed={seed}/n_basis={n_basis}/hidden_size={hidden_size}/neural_ode_model.pth"
+        fe_path = f"logs/{platform}/function_encoder/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/function_encoder_model.pth"
+        node_path = f"logs/{platform}/neural_ode/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/neural_ode_model.pth"
         fe_model, fe_loss_fn = load_model("function_encoder", device, n_basis, fe_path, hidden_size)
         node_model, node_loss_fn = load_model("neural_ode", device, n_basis, node_path, hidden_size)
 
@@ -87,7 +86,7 @@ for batch in dataset:
         rls_error = torch.zeros((num_steps), device=device)
 
         # Initialize the MAML problem.
-        model_path = f"logs/{platform}/{training_set}/maml/seed={seed}/n_basis={n_basis}/hidden_size={hidden_size}/maml_model.pth"
+        model_path = f"logs/{platform}/maml/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/maml_model.pth"
         maml_model, maml_loss_fn = load_model("maml", device, n_basis, model_path, hidden_size)
         maml_error = torch.zeros((num_steps), device=device)
 
@@ -145,7 +144,6 @@ for mt in model_types:
     errors = np.concatenate([all_results[mt][seed] for seed in seeds], axis=0)
 
     # Calculate the accumulated errors from all seeds.
-    # errors = np.cumsum(errors, axis=1)
     accum_errors = np.cumsum(errors, axis=1)
 
     # Compute statistics

@@ -20,16 +20,16 @@ def format_fig():
     plt.rcParams.update({
         'font.family': 'STIXGeneral',
         'mathtext.fontset': 'stix',
-        'font.size': 12,
-        'axes.labelsize': 12,
-        'axes.titlesize': 12,
-        'legend.fontsize': 12,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
+        'font.size': 8,
+        'axes.labelsize': 8,
+        'axes.titlesize': 8,
+        'legend.fontsize': 8,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
     })
 
     # Plotting
-    fig = plt.figure()#figsize=(3.5, 2.5))
+    fig = plt.figure(figsize=(3.5, 2.5))
     colors = {"neural_ode": "#D62728", "function_encoder": "#1F77B4", "rls": "#2ca02c", "maml": "#A200FF"}
     names = {"neural_ode": "NODE", "function_encoder": "FE", "rls": "FE-RLS", "maml": "MAML"}
 
