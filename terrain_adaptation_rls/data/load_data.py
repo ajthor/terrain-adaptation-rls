@@ -71,6 +71,59 @@ class PhoenixDataset(IterableDataset):
             yield xs, dt, ys, example_xs, example_dt, example_ys
 
 
+class LocalizedDataset(IterableDataset):
+    def __init__(
+        self,
+        inputs: List[torch.Tensor],
+        targets: List[torch.Tensor],
+        n_example_points: int,
+        n_points: int,
+        window: int
+    ):
+
+        self.inputs = inputs  # list of tensors of shape [n_points, n_features]
+        self.targets = targets  # list of tensors of shape [n_points, n_features]
+
+        assert len(self.inputs) == len(
+            self.targets
+        ), "Inputs and targets must have the same length"
+
+        for i in range(len(self.inputs)):
+            if self.inputs[i].shape[0] != self.targets[i].shape[0]:
+                raise ValueError(
+                    f"Input and target tensors must have the same number of samples. "
+                    f"Input shape: {self.inputs[i].shape}, Target shape: {self.targets[i].shape}"
+                )
+
+        self.n_example_points = n_example_points
+        self.n_points = n_points
+        self.window = window
+
+    def __iter__(self):
+        while True:
+            n_samples = self.n_points + self.n_example_points
+
+            # Generate a random index for choosing a training scene
+            B = torch.randint(0, len(self.inputs), (1,)).item()
+            inputs = self.inputs[B]
+            targets = self.targets[B]
+
+            # Sample one random point from the data. 
+            center = torch.randint(self.window, inputs.shape[0] - 2 * self.window, (1,)).item()
+
+            # Use points to the right as the queries. 
+            xs = inputs[center : center + 2 * self.window, 1:]
+            dt = targets[center : center + 2 * self.window, 0] - inputs[center : center + 2 * self.window, 0]
+            ys = targets[center : center + 2 * self.window, 1:] - xs[:, :6]
+
+            # Use points centered around the center as the examples. 
+            example_xs = inputs[center - self.window : center + self.window, 1:]
+            example_dt = targets[center - self.window : center + self.window, 0] - inputs[center - self.window : center + self.window, 0]
+            example_ys = targets[center - self.window : center + self.window, 1:] - example_xs[:, :6]
+
+            yield xs, dt, ys, example_xs, example_dt, example_ys
+
+
 class TestDataset(Dataset):
     def __init__(
         self,
