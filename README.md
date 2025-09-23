@@ -112,6 +112,29 @@ And to generate an animated version of this plot, run
 python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_ice_autonomy_11_animated.py
 ```
 
+#### FE-RLS Coefficients Over Time
+Evaluate how FE-RLS updates its coefficients over time (starting from zero prior knowledge) on different
+scenes by running
+```
+python3 terrain_adaptation_rls/eval_coeff_evolution_over_sequential.py
+```
+Specify the `scene` and the `platform`. 
+
+Create an animated plot of the FE-RLS coefficient norm and single-step prediction error over time on 
+the `scene0_to_scene1_mission` scene by running
+```
+python3 terrain_adaptation_rls/plot_coeffs_and_error_animated.py
+```
+This plot shows that FE-RLS coefficients converge towards the batch-computed FE coefficients when the 
+terrain abruptly switches to ice. 
+
+Create a similar animated plot for hardware performance on `ice_autonomy_11` by running
+```
+python3 terrain_adaptation_rls/plot_coeffs_and_error_animated_jackal.py
+```
+In this scene, the norm of the coefficients is more noisy, and the convergence is less clear. 
+More work is needed in training FE models on hardware data. 
+
 
 ### Other plotting functions.
 - To plot velocity profiles of the terrain data, use `terrain_adaptation_rls/plot_data.py`
