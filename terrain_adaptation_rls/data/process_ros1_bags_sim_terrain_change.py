@@ -73,8 +73,8 @@ def write_csv(filepath, rows):
         writer.writeheader()
         writer.writerows(rows)
 
-data_path = f"/home/arl/terrain-adaptation-rls/terrain_adaptation_rls/data/{platform}"
-terrain_path = os.path.join(data_path, f'{terrain}/{bag_name}')
+data_path = f"terrain-adaptation-rls/terrain_adaptation_rls/data/{platform}"
+terrain_path = os.path.join(os.path.expanduser("~"), data_path, f'{terrain}/{bag_name}')
 os.makedirs(terrain_path, exist_ok=True)
 write_csv(os.path.join(terrain_path, "cmd_vel.csv"), cmd_clean)
 write_csv(os.path.join(terrain_path, "odom.csv"), odom_clean)

@@ -2,6 +2,7 @@ from mcap.reader import make_reader
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 import csv
+import os
 import numpy as np
 
 """Extracts and processes data from ROS 2 bags.
@@ -92,8 +93,10 @@ def write_csv(filepath, rows):
         writer.writeheader()
         writer.writerows(rows)
 
-data_path = f"/home/arl/terrain-adaptation-rls/terrain_adaptation_rls/data/{platform}"
-write_csv(f"{data_path}/{terrain}_cmd_vel.csv", cmd_clean)
-write_csv(f"{data_path}/{terrain}_odom.csv", odom_clean)
+data_path = f"terrain-adaptation-rls/terrain_adaptation_rls/data/{platform}"
+terrain_path = os.path.join(os.path.expanduser("~"), data_path, terrain)
+os.makedirs(terrain_path, exist_ok=True)
+write_csv(os.path.join(terrain_path, "cmd_vel.csv"), cmd_clean)
+write_csv(os.path.join(terrain_path, "odom.csv"), odom_clean)
 
 print(f"Wrote {len(cmd_clean)} cmd_vel rows and {len(odom_clean)} odom rows.")
