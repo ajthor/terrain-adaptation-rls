@@ -40,17 +40,16 @@ def load_errors(csv_file, tmin=95, tmax=140):
 # -------------------------------
 # Animated combined plot
 # -------------------------------
-def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=128, fps=8):
-    save_path = f"plots/{platform}/{scene}"
+def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=128, fps=8, seed=0):
+    save_path = f"plots/{platform}/coefficients_over_time/{scene}"
     os.makedirs(save_path, exist_ok=True)
 
     # Prepare figure with subplots
-    fig, colors, names = format_fig()
-    # fig.subplots_adjust(bottom=0.25, left=0.2)
+    _, colors, _ = format_fig()
+    fig = plt.figure()
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=fig.get_size_inches(), dpi=fig.dpi, sharex=True
     )
-    # fig.legend(loc="outside upper center", bbox_to_anchor=(0.5, 1.05), ncol=4, frameon=False)
 
     # -------------------------------
     # Load errors
@@ -66,7 +65,7 @@ def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=12
     # Load coefficient norms
     # -------------------------------
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    fe_path = f"logs/{platform}/function_encoder/seed=0/function_encoder_model.pth"
+    fe_path = f"logs/{platform}/function_encoder/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/function_encoder_model.pth"
     fe_model, _ = load_model("function_encoder", device, n_basis, fe_path, hidden_size)
 
     scene_data = load_scenes(["scene0", "scene1"], platform)
@@ -142,7 +141,6 @@ def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=12
         ax1.plot(t[:frame], med[:frame], label="RLS", color=colors["rls"])
         ax1.fill_between(t[:frame], p10[:frame], p90[:frame], alpha=0.2, color=colors["rls"])
 
-        
 
         # Coefficient subplot
         ax2.set_xlim(15, max_t)
@@ -155,12 +153,6 @@ def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=12
         ax2.hlines(ice_norm, xmin=119.042 - time_array[mask][0], xmax=max_t,
                    linestyles="dashed", color='k', label="FE-Ice")
         ax2.plot(time_filtered[:frame], rls_norms_filtered[:frame])
-        
-        # if frame == 0:
-        # Add terrain change vertical lines
-        
-            # Legend only once, outside top center
-        # fig.legend(loc="outside upper center", ncol=5, frameon=False)
 
         return ax1, ax2
 
@@ -170,8 +162,8 @@ def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=12
     n_frames = max(len(t), len(time_filtered))
     ani = FuncAnimation(fig, update, frames=n_frames, interval=1000/fps, blit=False)
 
-    mp4_file = os.path.join(save_path, f"combined_animation_test.mp4")
-    writer = FFMpegWriter(fps=fps, metadata={"artist": "ICRA Hero Plot"})
+    mp4_file = os.path.join(save_path, f"rls_coeffs_and_error.mp4")
+    writer = FFMpegWriter(fps=fps)
     ani.save(mp4_file, writer=writer, dpi=300)
 
     print(f"Saved animation to {mp4_file}")
@@ -182,7 +174,7 @@ def animate_errors_and_coeffs(scene, platform="warty", n_basis=8, hidden_size=12
 # -------------------------------
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--scene", type=str, default="ufuk_transition/fe_rls/2025-09-16-10-03-02")
+    parser.add_argument("--scene", type=str, default="scene0_to_scene1_mission")
     parser.add_argument("--fps", type=int, default=8, help="Frames per second for MP4")
     args = parser.parse_args()
 

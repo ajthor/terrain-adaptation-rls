@@ -2,10 +2,9 @@ import csv
 import os
 import torch
 import numpy as np
-from plot_utils import load_model, format_fig
-from data.load_data import load_scenes, fullBagDataset, fullBagDatasetOnline
+from plot_utils import load_model
+from data.load_data import load_scenes, fullBagDataset
 from function_encoder.coefficients import recursive_least_squares_update
-import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 
 def smooth_log(y, window_length=31, polyorder=3):
@@ -25,12 +24,12 @@ n_basis = 8
 hidden_size = 128
 torch.manual_seed(30)
 model_types = ["rls"]  
+seed = 0
 
 # Choose the evaluation scene
-scene = 'ice_autonomy/12'
-platform = 'jackal_0770'
+scene = 'scene0_to_scene1_mission'
+platform = 'warty'
 scene_data = load_scenes([scene], platform)
-training_set = 'grass_gym_ice_mulch_pavement_turf'
 
 # Create a dataset for testing prediction errors. 
 scene_input, scene_target = scene_data[f'{scene}']
@@ -52,7 +51,7 @@ for batch in dataset:
     num_steps = times.shape[1]
     
     # Load the models.
-    fe_path = f"logs/{platform}/{training_set}/function_encoder/seed=0/n_basis={n_basis}/hidden_size={hidden_size}/function_encoder_model.pth"
+    fe_path = f"logs/{platform}/function_encoder/seed={seed}/hidden_size={hidden_size}/n_basis={n_basis}/function_encoder_model.pth"
     fe_model, fe_loss_fn = load_model("function_encoder", device, n_basis, fe_path, hidden_size)
 
     # Initialize the RLS problem. 
@@ -82,29 +81,14 @@ for batch in dataset:
 
         rls_coeffs[i, :] = coeffs
 
-    # Plot the coeffs over time.
-    # time_array = times.cpu().numpy()[0,:]
-    # # norms = torch.norm(rls_coeffs, dim=1, keepdim=True)
-    # fig, ax = plt.subplots()
-    # for jj in range(n_basis):
-    #     # Apply smoothing (window length must be odd and < len(timesteps))
-    #     window_length = min(21, len(time_array) - (len(time_array) + 1) % 2)  # adaptive odd size
-    #     polyorder = 3  # cubic smoothing
-    #     smooth = smooth_log(rls_coeffs[:, jj].detach().cpu(), window_length, polyorder)
-    #     ax.plot(time_array, smooth, label=f"Value {jj}")
-    # plt.show()
-
 
 # Save the data
-# save_path = f"plots/{platform}/single_step_errors_over_full_scenes/{scene}"
 save_path = f"plots/{platform}/coefficients_over_time/{scene}"
 os.makedirs(save_path, exist_ok=True)
 
-
-# After the loop finishes
 # Move to numpy
-time_array = times[0].detach().cpu().numpy()        # shape (num_steps,)
-coeffs_array = rls_coeffs.detach().cpu().numpy()    # shape (num_steps, n_basis)
+time_array = times[0].detach().cpu().numpy()      
+coeffs_array = rls_coeffs.detach().cpu().numpy()    
 
 # Combine time and coefficients
 output_array = np.hstack([time_array[:, None], coeffs_array])
@@ -122,15 +106,3 @@ with open(save_path, "w", newline="") as f:
     writer.writerows(output_array)
 
 print(f"Saved coefficients to {save_path}")
-
-
-
-
-# # Save data to a CSV file.
-# csv_file = os.path.join(save_path, f"rls_coeffs.csv")
-# with open(csv_file, "w", newline="") as f:
-#     writer = csv.writer(f)
-#     writer.writerow(["timestep", "median", "p10", "p90"])
-#     for t, m, lo, hi in zip(time_array, med, p10, p90):
-#         writer.writerow([t, m, lo, hi])
-
