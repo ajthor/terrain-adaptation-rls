@@ -7,3 +7,11 @@ logs/
 data_processed/
 plots/
 plots_old/
+artifacts/
+outputs/
+results/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
