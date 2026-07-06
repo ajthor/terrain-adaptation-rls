@@ -1,0 +1,38 @@
+{
+  "name": "warty_fe_debug",
+  "kind": "train",
+  "platform": "warty",
+  "methods": [
+    "fe_static",
+    "fe_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "scene0",
+      "scene2",
+      "scene3",
+      "scene4",
+      "scene6",
+      "scene7"
+    ],
+    "validation_scenes": [
+      "scene5"
+    ],
+    "test_scenes": [
+      "scene1"
+    ],
+    "split_policy": "scene_holdout"
+  },
+  "model": {
+    "family": "function_encoder",
+    "basis_type": "mlp_increment",
+    "n_basis": 8,
+    "hidden_size": 128
+  },
+  "training": {
+    "steps": 2,
+    "batch_size": 4,
+    "learning_rate": 0.001
+  }
+}

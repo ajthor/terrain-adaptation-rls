@@ -1,0 +1,26 @@
+{
+  "name": "warty_scene0_to_scene1_streaming",
+  "kind": "eval",
+  "platform": "warty",
+  "methods": [
+    "node_static",
+    "fe_static",
+    "fe_rls",
+    "fe_sgd",
+    "fe_window_ls",
+    "fe_kalman",
+    "maml_online",
+    "linear_basis_rls",
+    "neuralfly_style_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "scene": "scene0_to_scene1",
+    "reference_scene": "scene0",
+    "split_policy": "scene_transition_replay"
+  },
+  "evaluation": {
+    "metric": "streaming_single_step_error",
+    "predict_before_update": true
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "warty_sources",
+  "kind": "manifest",
+  "platform": "warty",
+  "output_root": "outputs",
+  "data": {
+    "data_root": "terrain_adaptation_rls/data",
+    "include_hash": false
+  }
+}

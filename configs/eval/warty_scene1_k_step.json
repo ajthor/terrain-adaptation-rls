@@ -1,0 +1,27 @@
+{
+  "name": "warty_scene1_k_step",
+  "kind": "eval",
+  "platform": "warty",
+  "methods": [
+    "node_static",
+    "fe_static",
+    "fe_rls",
+    "fe_sgd",
+    "fe_window_ls",
+    "fe_kalman",
+    "maml_online",
+    "linear_basis_rls",
+    "neuralfly_style_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "scene": "scene1",
+    "split_policy": "heldout_scene_replay"
+  },
+  "evaluation": {
+    "metric": "k_step_lookahead_error",
+    "k_steps": 15,
+    "n_rollouts": 50,
+    "freeze_adaptation_state": true
+  }
+}
