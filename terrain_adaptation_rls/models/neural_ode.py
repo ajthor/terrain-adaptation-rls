@@ -1,7 +1,7 @@
 import torch
 from math import sqrt
-from function_encoder.model.mlp import MLP
 from function_encoder.model.neural_ode import NeuralODE, ODEFunc
+from .networks import MLP
 from .rk4 import rk4_step
 
 

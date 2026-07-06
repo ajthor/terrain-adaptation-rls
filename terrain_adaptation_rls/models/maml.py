@@ -1,7 +1,7 @@
 import torch
 from math import sqrt
-from function_encoder.model.mlp import MLP
 from function_encoder.model.neural_ode import NeuralODE, ODEFunc
+from .networks import MLP
 from .rk4 import rk4_step
 
 
@@ -35,12 +35,10 @@ def load_model(device, path, n_basis=8, hidden_size=128):
     return model
 
 
-def loss_fn(model, batch):
-    if torch.cuda.is_available():
-        device = "cuda"
-    else:
-        device = "cpu"
-        
+def loss_fn(model, batch, device=None):
+    if device is None:
+        device = next(model.parameters()).device
+
     xs, dt, ys, *_ = batch  # ignore example_xs, example_dt, example_ys if present
     xs = xs.to(device)
     dt = dt.to(device)
