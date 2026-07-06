@@ -1,0 +1,58 @@
+import contextlib
+import io
+import json
+import tempfile
+from pathlib import Path
+import unittest
+
+from terrain_adaptation_rls.experiments import train
+from terrain_adaptation_rls.training import DistributedContext
+
+
+class TrainingEntrypointTests(unittest.TestCase):
+    def test_distributed_context_defaults_to_single_process(self):
+        context = DistributedContext.from_env({})
+
+        self.assertEqual(context.rank, 0)
+        self.assertEqual(context.local_rank, 0)
+        self.assertEqual(context.world_size, 1)
+        self.assertFalse(context.is_distributed)
+        self.assertTrue(context.is_rank_zero)
+
+    def test_distributed_context_reads_torchrun_environment(self):
+        context = DistributedContext.from_env(
+            {"RANK": "2", "LOCAL_RANK": "1", "WORLD_SIZE": "4"}
+        )
+
+        self.assertEqual(context.rank, 2)
+        self.assertEqual(context.local_rank, 1)
+        self.assertEqual(context.world_size, 4)
+        self.assertTrue(context.is_distributed)
+        self.assertFalse(context.is_rank_zero)
+
+    def test_train_main_creates_run(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "train.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug_train",
+                        "kind": "train",
+                        "output_root": (Path(tmpdir) / "outputs").as_posix(),
+                    }
+                )
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = train.main(["--config", config_path.as_posix()])
+
+            run_dirs = list((Path(tmpdir) / "outputs" / "train").iterdir())
+            distributed = json.loads((run_dirs[0] / "distributed.json").read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(run_dirs), 1)
+        self.assertEqual(distributed["world_size"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
