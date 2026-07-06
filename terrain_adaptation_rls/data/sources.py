@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import io
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -150,6 +151,45 @@ def write_source_manifest(
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def source_audit_rows(scenes: Iterable[SceneSourceSummary]) -> list[dict[str, Any]]:
+    """Convert scene summaries into flat rows for quick audits."""
+
+    rows = []
+    for scene in scenes:
+        odom = scene.files["odom"]
+        cmd_vel = scene.files["cmd_vel"]
+        duration = _duration_seconds(odom)
+        rows.append(
+            {
+                "platform": scene.platform,
+                "scene": scene.scene,
+                "odom_rows": odom.rows,
+                "cmd_vel_rows": cmd_vel.rows,
+                "duration_seconds": "" if duration is None else duration,
+                "has_triggers": "triggers" in scene.files,
+            }
+        )
+    return rows
+
+
+def source_audit_csv(scenes: Iterable[SceneSourceSummary]) -> str:
+    """Format scene summaries as a CSV table."""
+
+    fieldnames = [
+        "platform",
+        "scene",
+        "odom_rows",
+        "cmd_vel_rows",
+        "duration_seconds",
+        "has_triggers",
+    ]
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(source_audit_rows(scenes))
+    return output.getvalue()
+
+
 def _parse_time(value: str) -> float | None:
     try:
         return float(value)
@@ -163,3 +203,9 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _duration_seconds(summary: CSVSourceSummary) -> float | None:
+    if summary.first_time is None or summary.last_time is None:
+        return None
+    return summary.last_time - summary.first_time
