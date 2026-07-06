@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
 from terrain_adaptation_rls.configuration import ExperimentConfig, load_config, write_config
 from terrain_adaptation_rls.evaluation.artifacts import create_run_dir, write_json
+from terrain_adaptation_rls.methods import validate_method_names
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ def prepare_run(
     """Load config and create a run directory for an experiment command."""
 
     config = load_config(config_path)
+    method_specs = validate_method_names(config.methods) if config.methods else ()
     name = run_name or config.name
     run_root = Path(config.output_root) / config.kind
     run_dir = create_run_dir(run_root, run_name=name, timestamp=timestamp)
@@ -40,7 +43,8 @@ def prepare_run(
             "name": config.name,
             "kind": config.kind,
             "platform": config.platform,
-            "methods": list(config.methods),
+            "methods": [method.name for method in method_specs],
+            "method_specs": [asdict(method) for method in method_specs],
         },
     )
     return PreparedRun(config=config, run_dir=run_dir)

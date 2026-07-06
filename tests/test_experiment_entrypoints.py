@@ -39,7 +39,24 @@ class ExperimentEntrypointTests(unittest.TestCase):
         self.assertEqual(prepared.run_dir.name, "20260706T120000Z_debug")
         self.assertEqual(resolved["methods"], ["fe_rls"])
         self.assertEqual(summary["command"], "eval_streaming")
+        self.assertEqual(summary["method_specs"][0]["name"], "fe_rls")
         self.assertEqual(summary["status"], "prepared")
+
+    def test_prepare_run_rejects_unknown_method(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug",
+                        "kind": "eval",
+                        "methods": ["missing_method"],
+                    }
+                )
+            )
+
+            with self.assertRaisesRegex(KeyError, "Known methods"):
+                prepare_run(config_path, command="eval_streaming")
 
     def test_eval_streaming_main_creates_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
