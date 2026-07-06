@@ -1,0 +1,66 @@
+{
+  "notes": [
+    "Legacy scripts stay in place until the new pipeline reproduces or explains their outputs.",
+    "Intentional differences should be documented as bug fixes or convention changes."
+  ],
+  "scripts": [
+    {
+      "legacy_path": "terrain_adaptation_rls/train.py",
+      "role": "Train NODE, FE, and MAML models from hardcoded scene splits.",
+      "new_entrypoint": "python -m terrain_adaptation_rls.experiments.train --config <config>",
+      "audit_points": [
+        "Move hardcoded platform/scene choices into config.",
+        "Use current Function Encoder package APIs for FE construction.",
+        "Centralize device handling.",
+        "Support checkpointing, resume, and torchrun/DDP."
+      ]
+    },
+    {
+      "legacy_path": "train_all.sh",
+      "role": "Launch repeated training runs over models/platforms/seeds.",
+      "new_entrypoint": "future sweep launcher",
+      "audit_points": [
+        "Uses --grad even though train.py defines --gradsteps.",
+        "Should be replaced by config-driven sweeps over methods/platforms/seeds."
+      ]
+    },
+    {
+      "legacy_path": "terrain_adaptation_rls/eval_error_over_seeds_sequntial.py",
+      "role": "Streaming single-step error evaluation over full scenes.",
+      "new_entrypoint": "python -m terrain_adaptation_rls.experiments.eval_streaming --config <config>",
+      "audit_points": [
+        "Hardcoded scenes, seeds, n_basis, hidden_size, inner_steps, and forgetting factor.",
+        "Prediction-before-update ordering should be preserved.",
+        "Outputs should become eval artifacts rather than plot-specific CSVs."
+      ]
+    },
+    {
+      "legacy_path": "terrain_adaptation_rls/plot_error_k_step_with_adaptation.py",
+      "role": "K-step lookahead evaluation with online adaptation.",
+      "new_entrypoint": "python -m terrain_adaptation_rls.experiments.eval_k_step --config <config>",
+      "audit_points": [
+        "Preserve adaptation-state freezing within rollout windows unless intentionally changed.",
+        "Make body-frame rollout update explicit and tested.",
+        "Separate evaluation from plotting."
+      ]
+    },
+    {
+      "legacy_path": "terrain_adaptation_rls/eval_coeff_evolution_over_sequential.py",
+      "role": "Track FE-RLS coefficients through a sequential scene.",
+      "new_entrypoint": "coefficient diagnostics from eval artifacts",
+      "audit_points": [
+        "Save coefficients and covariance diagnostics as eval artifacts.",
+        "Compare to batch/offline coefficients only when the comparison is mathematically meaningful."
+      ]
+    },
+    {
+      "legacy_path": "terrain_adaptation_rls/shuffle_and_split_data.py",
+      "role": "Materialize train/test CSV files under data_split.",
+      "new_entrypoint": "virtual split policies and optional materialized indices",
+      "audit_points": [
+        "Avoid duplicating data by default.",
+        "Record scene membership and index policies in manifests."
+      ]
+    }
+  ]
+}
