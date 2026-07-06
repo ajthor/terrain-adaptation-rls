@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .k_step import KStepRecord
 from .streaming import StreamingRecord
 
 
@@ -56,6 +57,41 @@ def write_streaming_errors_csv(
             )
 
 
+def write_k_step_errors_csv(
+    path: str | Path,
+    records: Iterable[KStepRecord],
+) -> None:
+    """Write per-step k-step rollout errors."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "window_index",
+                "time",
+                "step",
+                "step_error",
+                "accumulated_error",
+            ],
+        )
+        writer.writeheader()
+        for record in records:
+            accumulated = 0.0
+            for step, error in enumerate(record.step_errors, start=1):
+                accumulated += error
+                writer.writerow(
+                    {
+                        "window_index": record.index,
+                        "time": "" if record.time is None else record.time,
+                        "step": step,
+                        "step_error": error,
+                        "accumulated_error": accumulated,
+                    }
+                )
+
+
 def summarize_errors(records: Iterable[StreamingRecord]) -> dict[str, float | int]:
     """Summarize a sequence of streaming records."""
 
@@ -66,6 +102,24 @@ def summarize_errors(records: Iterable[StreamingRecord]) -> dict[str, float | in
         "n": len(errors),
         "mean_error": sum(errors) / len(errors),
         "final_accumulated_error": sum(errors),
+    }
+
+
+def summarize_k_step_errors(records: Iterable[KStepRecord]) -> dict[str, float | int]:
+    """Summarize k-step rollout records."""
+
+    records = list(records)
+    if not records:
+        return {
+            "n_windows": 0,
+            "max_horizon": 0,
+            "mean_accumulated_error": 0.0,
+        }
+    accumulated_errors = [record.accumulated_error for record in records]
+    return {
+        "n_windows": len(records),
+        "max_horizon": max(len(record.step_errors) for record in records),
+        "mean_accumulated_error": sum(accumulated_errors) / len(accumulated_errors),
     }
 
 

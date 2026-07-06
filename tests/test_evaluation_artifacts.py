@@ -8,9 +8,12 @@ import unittest
 from terrain_adaptation_rls.evaluation.artifacts import (
     create_run_dir,
     summarize_errors,
+    summarize_k_step_errors,
     write_json,
+    write_k_step_errors_csv,
     write_streaming_errors_csv,
 )
+from terrain_adaptation_rls.evaluation.k_step import KStepRecord
 from terrain_adaptation_rls.evaluation.streaming import StreamingRecord
 
 
@@ -59,6 +62,39 @@ class EvaluationArtifactTests(unittest.TestCase):
         self.assertEqual(summary["n"], 2)
         self.assertEqual(summary["mean_error"], 2.0)
         self.assertEqual(summary["final_accumulated_error"], 4.0)
+
+    def test_write_k_step_errors_csv(self):
+        records = [
+            KStepRecord(
+                index=0,
+                time=0.0,
+                predictions=(None, None),
+                rolled_states=(None, None),
+                step_errors=(1.0, 3.0),
+            )
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "k_step.csv"
+            write_k_step_errors_csv(path, records)
+            with path.open() as f:
+                rows = list(csv.DictReader(f))
+
+        self.assertEqual(rows[0]["step"], "1")
+        self.assertEqual(rows[0]["accumulated_error"], "1.0")
+        self.assertEqual(rows[1]["step"], "2")
+        self.assertEqual(rows[1]["accumulated_error"], "4.0")
+
+    def test_summarize_k_step_errors(self):
+        records = [
+            KStepRecord(0, 0.0, (), (), (1.0, 3.0)),
+            KStepRecord(1, 0.1, (), (), (2.0,)),
+        ]
+
+        summary = summarize_k_step_errors(records)
+
+        self.assertEqual(summary["n_windows"], 2)
+        self.assertEqual(summary["max_horizon"], 2)
+        self.assertEqual(summary["mean_accumulated_error"], 3.0)
 
 
 if __name__ == "__main__":
