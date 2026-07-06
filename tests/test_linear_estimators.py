@@ -1,21 +1,25 @@
 import unittest
 
-import torch
+try:
+    import torch
 
-from terrain_adaptation_rls.estimators.linear import (
-    CoefficientSGDState,
-    KalmanState,
-    RLSState,
-    WindowedLeastSquaresState,
-    coefficient_sgd_update,
-    kalman_update,
-    linear_predict,
-    rls_update,
-    solve_ridge_coefficients,
-    windowed_least_squares_update,
-)
+    from terrain_adaptation_rls.estimators.linear import (
+        CoefficientSGDState,
+        KalmanState,
+        RLSState,
+        WindowedLeastSquaresState,
+        coefficient_sgd_update,
+        kalman_update,
+        linear_predict,
+        rls_update,
+        solve_ridge_coefficients,
+        windowed_least_squares_update,
+    )
+except ModuleNotFoundError:
+    torch = None
 
 
+@unittest.skipIf(torch is None, "torch is not installed")
 class LinearEstimatorTests(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(7)
