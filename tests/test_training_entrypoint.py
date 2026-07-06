@@ -53,6 +53,29 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertEqual(len(run_dirs), 1)
         self.assertEqual(distributed["world_size"], 1)
 
+    def test_train_dry_run_does_not_create_run(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "train.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug_train",
+                        "kind": "train",
+                        "methods": ["node_static"],
+                        "output_root": (Path(tmpdir) / "outputs").as_posix(),
+                    }
+                )
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = train.main(["--config", config_path.as_posix(), "--dry-run"])
+
+            output_dir = Path(tmpdir) / "outputs"
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid train config", stdout.getvalue())
+        self.assertFalse(output_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

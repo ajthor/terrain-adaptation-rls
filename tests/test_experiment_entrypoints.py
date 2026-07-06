@@ -69,6 +69,20 @@ class ExperimentEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(run_dirs), 1)
 
+    def test_eval_streaming_dry_run_does_not_create_run(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = _write_config(tmpdir, name="streaming")
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = eval_streaming.main(
+                    ["--config", config_path.as_posix(), "--dry-run"]
+                )
+
+            output_dir = Path(tmpdir) / "outputs"
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid eval config", stdout.getvalue())
+        self.assertFalse(output_dir.exists())
+
     def test_eval_k_step_main_creates_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = _write_config(tmpdir, name="k_step")

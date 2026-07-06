@@ -9,7 +9,7 @@ from pathlib import Path
 
 from terrain_adaptation_rls.configuration import ExperimentConfig, load_config, write_config
 from terrain_adaptation_rls.evaluation.artifacts import create_run_dir, write_json
-from terrain_adaptation_rls.methods import validate_method_names
+from terrain_adaptation_rls.methods import MethodSpec, validate_method_names
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,22 @@ class PreparedRun:
 
     config: ExperimentConfig
     run_dir: Path
+
+
+@dataclass(frozen=True)
+class ValidatedConfig:
+    """A config with method names resolved to known method specs."""
+
+    config: ExperimentConfig
+    method_specs: tuple[MethodSpec, ...]
+
+
+def validate_experiment_config(config_path: str | Path) -> ValidatedConfig:
+    """Load a config and validate common fields without creating outputs."""
+
+    config = load_config(config_path)
+    method_specs = validate_method_names(config.methods) if config.methods else ()
+    return ValidatedConfig(config=config, method_specs=method_specs)
 
 
 def prepare_run(
@@ -29,8 +45,9 @@ def prepare_run(
 ) -> PreparedRun:
     """Load config and create a run directory for an experiment command."""
 
-    config = load_config(config_path)
-    method_specs = validate_method_names(config.methods) if config.methods else ()
+    validated = validate_experiment_config(config_path)
+    config = validated.config
+    method_specs = validated.method_specs
     name = run_name or config.name
     run_root = Path(config.output_root) / config.kind
     run_dir = create_run_dir(run_root, run_name=name, timestamp=timestamp)
