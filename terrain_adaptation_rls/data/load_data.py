@@ -2,9 +2,7 @@ import os
 
 from typing import List
 
-import csv
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 import torch
@@ -460,13 +458,10 @@ def load_csv(filepath):
     repo_root = os.path.dirname(os.path.abspath(__file__))  # path to terrain_adaptation_rls_rls/data
     repo_root = os.path.abspath(os.path.join(repo_root, "../.."))  # path to repo root
     full_path = os.path.join(repo_root, filepath)
-    data = []
-    with open(full_path, "r") as f:
-        reader = csv.reader(f)
-        next(reader)  # Skip the header row
-        for row in reader:
-            data.append([float(x) for x in row])
-    return np.array(data)
+    data = np.loadtxt(full_path, delimiter=",", skiprows=1)
+    if data.ndim == 1:
+        data = data.reshape(1, -1)
+    return data
 
 
 def load_all_sim_scenes():
@@ -504,6 +499,8 @@ def plot_target_data(data):
     """
     Plot the target data for all scenes.
     """
+    import matplotlib.pyplot as plt
+
     for scene, (inputs, targets) in data.items():
         # Create scatter plots of the states in separate subfigures
         fig, axs = plt.subplots(3, 2, figsize=(10, 10))

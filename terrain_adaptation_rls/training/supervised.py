@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import csv
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -109,6 +111,127 @@ def run_synthetic_supervised_training(
     }
 
 
+def run_configured_supervised_training(
+    config: ExperimentConfig,
+    *,
+    device: torch.device | str = "cpu",
+    max_steps: int | None = None,
+    artifact_dir: str | Path | None = None,
+) -> dict[str, object]:
+    """Train a configured supervised FE/NODE model on real scene data."""
+
+    if config.platform is None:
+        raise ValueError("Real-data training requires config.platform")
+
+    train_scenes = [str(scene) for scene in config.data.get("train_scenes", ())]
+    validation_scenes = [str(scene) for scene in config.data.get("validation_scenes", ())]
+    if not train_scenes:
+        raise ValueError("Real-data training requires data.train_scenes")
+
+    from torch.utils.data import DataLoader
+
+    from terrain_adaptation_rls.data.load_data import PhoenixDataset, load_scenes
+
+    torch.manual_seed(config.seed)
+    device = torch.device(device)
+    built = build_model_from_config(config, device=device)
+
+    training = config.training
+    learning_rate = float(training.get("learning_rate", 1e-3))
+    configured_steps = int(training.get("steps", 1))
+    steps = configured_steps if max_steps is None else min(configured_steps, max_steps)
+    batch_size = int(training.get("batch_size", 2))
+    n_points = int(training.get("n_points", 128))
+    n_example_points = int(training.get("n_example_points", 32))
+    eval_interval = int(training.get("eval_interval", max(1, steps)))
+    max_eval_points = int(config.evaluation.get("max_eval_points", 512))
+
+    train_data = load_scenes(train_scenes, config.platform)
+    train_inputs = [train_data[scene][0] for scene in train_scenes]
+    train_targets = [train_data[scene][1] for scene in train_scenes]
+    train_dataset = PhoenixDataset(
+        train_inputs,
+        train_targets,
+        n_example_points=n_example_points,
+        n_points=n_points,
+    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size)
+    train_iter = iter(train_loader)
+
+    validation_data = load_scenes(validation_scenes, config.platform) if validation_scenes else {}
+    validation_batches = {
+        scene: scene_supervised_batch(
+            inputs=inputs,
+            targets=targets,
+            n_example_points=n_example_points,
+            max_query_points=max_eval_points,
+            device=device,
+            seed=config.seed,
+        )
+        for scene, (inputs, targets) in validation_data.items()
+    }
+
+    optimizer = torch.optim.Adam(built.model.parameters(), lr=learning_rate)
+    train_losses: list[float] = []
+    validation_losses: list[dict[str, float | int | str]] = []
+
+    for step in range(1, steps + 1):
+        batch = tuple(tensor.to(device) for tensor in next(train_iter))
+        built.model.train()
+        optimizer.zero_grad(set_to_none=True)
+        loss = built.loss_fn(built.model, batch, device)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(built.model.parameters(), 1.0)
+        optimizer.step()
+        train_losses.append(float(loss.detach().cpu()))
+
+        if validation_batches and (step == steps or step % eval_interval == 0):
+            built.model.eval()
+            with torch.no_grad():
+                for scene, validation_batch in validation_batches.items():
+                    validation_loss = built.loss_fn(built.model, validation_batch, device)
+                    validation_losses.append(
+                        {
+                            "step": step,
+                            "scene": scene,
+                            "loss": float(validation_loss.detach().cpu()),
+                        }
+                    )
+
+    metrics: dict[str, object] = {
+        "family": built.family,
+        "device": str(device),
+        "platform": config.platform,
+        "train_scenes": train_scenes,
+        "validation_scenes": validation_scenes,
+        "steps": steps,
+        "batch_size": batch_size,
+        "n_points": n_points,
+        "n_example_points": n_example_points,
+        "train_losses": train_losses,
+        "validation_losses": validation_losses,
+        "final_train_loss": train_losses[-1] if train_losses else None,
+        "final_validation_loss": validation_losses[-1]["loss"] if validation_losses else None,
+    }
+
+    if artifact_dir is not None:
+        artifact_path = Path(artifact_dir)
+        artifact_path.mkdir(parents=True, exist_ok=True)
+        torch.save(built.model.state_dict(), artifact_path / f"{built.family}_model.pth")
+        write_training_plots(artifact_path, metrics)
+        if validation_batches:
+            scene, validation_batch = next(iter(validation_batches.items()))
+            write_prediction_artifacts(
+                artifact_path,
+                built.model,
+                built.family,
+                validation_batch,
+                scene=scene,
+            )
+
+    return metrics
+
+
 def synthetic_batch(
     *,
     batch_size: int,
@@ -144,3 +267,166 @@ def synthetic_batch(
         tensor.to(device)
         for tensor in (xs, dt, ys, example_xs, example_dt, example_ys)
     )
+
+
+def scene_supervised_batch(
+    *,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    n_example_points: int,
+    max_query_points: int,
+    device: torch.device | str,
+    seed: int = 0,
+) -> tuple[torch.Tensor, ...]:
+    """Build one deterministic supervised batch from a processed scene."""
+
+    if inputs.shape[0] != targets.shape[0]:
+        raise ValueError("inputs and targets must have the same row count")
+    if inputs.shape[0] <= n_example_points:
+        raise ValueError("scene does not contain enough points for examples and queries")
+
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    indices = torch.randperm(inputs.shape[0], generator=generator)
+    example_indices = indices[:n_example_points]
+    query_indices = indices[n_example_points : n_example_points + max_query_points]
+    if query_indices.numel() == 0:
+        raise ValueError("scene does not contain query points after examples")
+
+    xs_all = inputs[:, 1:]
+    dt_all = targets[:, 0] - inputs[:, 0]
+    ys_all = targets[:, 1:] - xs_all[:, :6]
+
+    batch = (
+        xs_all[query_indices].unsqueeze(0),
+        dt_all[query_indices].unsqueeze(0),
+        ys_all[query_indices].unsqueeze(0),
+        xs_all[example_indices].unsqueeze(0),
+        dt_all[example_indices].unsqueeze(0),
+        ys_all[example_indices].unsqueeze(0),
+    )
+    device = torch.device(device)
+    return tuple(tensor.to(device) for tensor in batch)
+
+
+def predict_supervised_batch(
+    model: torch.nn.Module,
+    family: str,
+    batch: tuple[torch.Tensor, ...],
+) -> torch.Tensor:
+    """Predict deltas for one supervised FE/NODE batch."""
+
+    xs, dt, _, example_xs, example_dt, example_ys = batch
+    if family == "function_encoder":
+        coefficients, _ = model.compute_coefficients((example_xs, example_dt), example_ys)
+        return model((xs, dt), coefficients=coefficients)
+    return model((xs, dt))
+
+
+def write_training_plots(artifact_dir: Path, metrics: dict[str, object]) -> None:
+    """Write training and validation loss plots."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    train_losses = [float(loss) for loss in metrics["train_losses"]]
+    validation_losses = list(metrics["validation_losses"])
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    if train_losses:
+        ax.plot(range(1, len(train_losses) + 1), train_losses, label="train")
+    if validation_losses:
+        ax.scatter(
+            [int(item["step"]) for item in validation_losses],
+            [float(item["loss"]) for item in validation_losses],
+            label="validation",
+            s=24,
+        )
+    ax.set_xlabel("step")
+    ax.set_ylabel("MSE")
+    ax.set_yscale("log")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(artifact_dir / "training_curve.png", dpi=160)
+    plt.close(fig)
+
+
+@torch.no_grad()
+def write_prediction_artifacts(
+    artifact_dir: Path,
+    model: torch.nn.Module,
+    family: str,
+    batch: tuple[torch.Tensor, ...],
+    *,
+    scene: str,
+) -> None:
+    """Write validation prediction CSV and plots for one scene."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    model.eval()
+    xs, dt, target, *_ = batch
+    prediction = predict_supervised_batch(model, family, batch)
+    error = torch.linalg.norm(prediction - target, dim=-1)
+    time = torch.cumsum(dt.squeeze(0), dim=0)
+
+    csv_path = artifact_dir / "validation_predictions.csv"
+    with csv_path.open("w", newline="") as f:
+        fieldnames = ["scene", "index", "time", "error"]
+        fieldnames += [f"target_{idx}" for idx in range(target.shape[-1])]
+        fieldnames += [f"prediction_{idx}" for idx in range(prediction.shape[-1])]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        target_cpu = target.squeeze(0).detach().cpu()
+        prediction_cpu = prediction.squeeze(0).detach().cpu()
+        error_cpu = error.squeeze(0).detach().cpu()
+        time_cpu = time.detach().cpu()
+        for idx in range(target_cpu.shape[0]):
+            row = {
+                "scene": scene,
+                "index": idx,
+                "time": float(time_cpu[idx]),
+                "error": float(error_cpu[idx]),
+            }
+            row.update(
+                {
+                    f"target_{dim}": float(target_cpu[idx, dim])
+                    for dim in range(target_cpu.shape[-1])
+                }
+            )
+            row.update(
+                {
+                    f"prediction_{dim}": float(prediction_cpu[idx, dim])
+                    for dim in range(prediction_cpu.shape[-1])
+                }
+            )
+            writer.writerow(row)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(time.detach().cpu(), error.squeeze(0).detach().cpu())
+    ax.set_xlabel("relative time [s]")
+    ax.set_ylabel("prediction error norm")
+    ax.set_title(scene)
+    fig.tight_layout()
+    fig.savefig(artifact_dir / "validation_error.png", dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(3, 2, figsize=(9, 7), sharex=True)
+    axes_flat = axes.ravel()
+    target_cpu = target.squeeze(0).detach().cpu()
+    prediction_cpu = prediction.squeeze(0).detach().cpu()
+    time_cpu = time.detach().cpu()
+    for dim, ax in enumerate(axes_flat):
+        ax.plot(time_cpu, target_cpu[:, dim], label="target", linewidth=1.2)
+        ax.plot(time_cpu, prediction_cpu[:, dim], label="prediction", linewidth=1.0)
+        ax.set_ylabel(f"dim {dim}")
+    axes_flat[0].legend()
+    axes_flat[-1].set_xlabel("relative time [s]")
+    axes_flat[-2].set_xlabel("relative time [s]")
+    fig.tight_layout()
+    fig.savefig(artifact_dir / "validation_components.png", dpi=160)
+    plt.close(fig)
