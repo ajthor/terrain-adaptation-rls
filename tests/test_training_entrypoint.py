@@ -8,6 +8,11 @@ import unittest
 from terrain_adaptation_rls.experiments import train
 from terrain_adaptation_rls.training import DistributedContext
 
+try:
+    import torch
+except ModuleNotFoundError:
+    torch = None
+
 
 class TrainingEntrypointTests(unittest.TestCase):
     def test_distributed_context_defaults_to_single_process(self):
@@ -75,6 +80,47 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("valid train config", stdout.getvalue())
         self.assertFalse(output_dir.exists())
+
+    @unittest.skipIf(torch is None, "torch/function_encoder is not installed")
+    def test_train_main_smoke_train_writes_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "train.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug_train",
+                        "kind": "train",
+                        "output_root": (Path(tmpdir) / "outputs").as_posix(),
+                        "model": {
+                            "family": "neural_ode",
+                            "hidden_size": 8,
+                            "n_basis": 2,
+                        },
+                        "training": {
+                            "steps": 1,
+                            "batch_size": 2,
+                            "n_points": 3,
+                        },
+                    }
+                )
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                exit_code = train.main(
+                    [
+                        "--config",
+                        config_path.as_posix(),
+                        "--smoke-train",
+                        "--device",
+                        "cpu",
+                    ]
+                )
+
+            run_dirs = list((Path(tmpdir) / "outputs" / "train").iterdir())
+            metrics = json.loads((run_dirs[0] / "training_smoke.json").read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(metrics["steps"], 1)
 
 
 if __name__ == "__main__":

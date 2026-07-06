@@ -19,6 +19,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate config and methods without creating output artifacts.",
     )
+    parser.add_argument(
+        "--smoke-train",
+        action="store_true",
+        help="Run a tiny synthetic supervised training loop and write metrics.",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Device for --smoke-train. Defaults to cpu to avoid occupying GPUs.",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Optional upper bound on --smoke-train steps.",
+    )
     return parser
 
 
@@ -47,6 +63,15 @@ def main(argv: list[str] | None = None) -> int:
             "is_distributed": context.is_distributed,
         },
     )
+    if args.smoke_train:
+        from terrain_adaptation_rls.training.supervised import run_synthetic_supervised_training
+
+        metrics = run_synthetic_supervised_training(
+            prepared.config,
+            device=args.device,
+            max_steps=args.max_steps,
+        )
+        write_json(prepared.run_dir / "training_smoke.json", metrics)
     if context.is_rank_zero:
         print(prepared.run_dir)
     return 0
