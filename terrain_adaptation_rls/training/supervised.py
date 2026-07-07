@@ -170,6 +170,16 @@ def run_configured_supervised_training(
         )
         for scene, (inputs, targets) in validation_data.items()
     }
+    validation_artifact_batches = {
+        scene: scene_sequence_batch(
+            inputs=inputs,
+            targets=targets,
+            n_example_points=n_example_points,
+            max_query_points=max_eval_points,
+            device=device,
+        )
+        for scene, (inputs, targets) in validation_data.items()
+    }
 
     optimizer = torch.optim.Adam(built.model.parameters(), lr=learning_rate)
     train_losses: list[float] = []
@@ -219,8 +229,8 @@ def run_configured_supervised_training(
         artifact_path.mkdir(parents=True, exist_ok=True)
         torch.save(built.model.state_dict(), artifact_path / f"{built.family}_model.pth")
         write_training_plots(artifact_path, metrics)
-        if validation_batches:
-            scene, validation_batch = next(iter(validation_batches.items()))
+        if validation_artifact_batches:
+            scene, validation_batch = next(iter(validation_artifact_batches.items()))
             write_prediction_artifacts(
                 artifact_path,
                 built.model,
@@ -291,6 +301,59 @@ def scene_supervised_batch(
     query_indices = indices[n_example_points : n_example_points + max_query_points]
     if query_indices.numel() == 0:
         raise ValueError("scene does not contain query points after examples")
+
+    return scene_batch_from_indices(
+        inputs=inputs,
+        targets=targets,
+        example_indices=example_indices,
+        query_indices=query_indices,
+        device=device,
+    )
+
+
+def scene_sequence_batch(
+    *,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    n_example_points: int,
+    max_query_points: int,
+    device: torch.device | str,
+    start_index: int = 0,
+) -> tuple[torch.Tensor, ...]:
+    """Build one contiguous supervised batch from a processed scene."""
+
+    if inputs.shape[0] != targets.shape[0]:
+        raise ValueError("inputs and targets must have the same row count")
+    if n_example_points <= 0:
+        raise ValueError("n_example_points must be positive")
+    if max_query_points <= 0:
+        raise ValueError("max_query_points must be positive")
+
+    query_start = start_index + n_example_points
+    query_stop = min(query_start + max_query_points, inputs.shape[0])
+    if query_start >= inputs.shape[0] or query_stop <= query_start:
+        raise ValueError("scene does not contain enough points for a contiguous query segment")
+
+    example_indices = torch.arange(start_index, query_start)
+    query_indices = torch.arange(query_start, query_stop)
+    return scene_batch_from_indices(
+        inputs=inputs,
+        targets=targets,
+        example_indices=example_indices,
+        query_indices=query_indices,
+        device=device,
+    )
+
+
+def scene_batch_from_indices(
+    *,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    example_indices: torch.Tensor,
+    query_indices: torch.Tensor,
+    device: torch.device | str,
+) -> tuple[torch.Tensor, ...]:
+    """Build a supervised batch from explicit example and query indices."""
 
     xs_all = inputs[:, 1:]
     dt_all = targets[:, 0] - inputs[:, 0]
@@ -430,3 +493,14 @@ def write_prediction_artifacts(
     fig.tight_layout()
     fig.savefig(artifact_dir / "validation_components.png", dpi=160)
     plt.close(fig)
+
+    from terrain_adaptation_rls.evaluation.diagnostic_plots import write_supervised_diagnostics
+
+    write_supervised_diagnostics(
+        artifact_dir,
+        model=model,
+        family=family,
+        batch=batch,
+        prediction=prediction,
+        scene=scene,
+    )

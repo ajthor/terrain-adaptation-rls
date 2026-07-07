@@ -8,6 +8,7 @@ try:
     from terrain_adaptation_rls.training.supervised import (
         build_model_from_config,
         run_synthetic_supervised_training,
+        scene_sequence_batch,
         synthetic_batch,
     )
 except ModuleNotFoundError:
@@ -64,6 +65,27 @@ class SupervisedTrainingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(NotImplementedError, "MAML meta-training"):
             build_model_from_config(config, device="cpu")
+
+    def test_scene_sequence_batch_keeps_query_order(self):
+        inputs = torch.zeros(10, 9)
+        targets = torch.zeros(10, 7)
+        inputs[:, 0] = torch.arange(10)
+        targets[:, 0] = torch.arange(10) + 0.1
+        targets[:, 1] = torch.arange(10)
+
+        batch = scene_sequence_batch(
+            inputs=inputs,
+            targets=targets,
+            n_example_points=2,
+            max_query_points=3,
+            device="cpu",
+        )
+
+        xs, dt, ys, example_xs, *_ = batch
+        self.assertEqual(tuple(xs.shape), (1, 3, 8))
+        self.assertTrue(torch.allclose(dt, torch.full((1, 3), 0.1)))
+        self.assertTrue(torch.allclose(ys[0, :, 0], torch.tensor([2.0, 3.0, 4.0])))
+        self.assertEqual(tuple(example_xs.shape), (1, 2, 8))
 
 
 if __name__ == "__main__":
