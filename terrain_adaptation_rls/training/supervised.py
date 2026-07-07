@@ -144,6 +144,8 @@ def run_configured_supervised_training(
     n_points = int(training.get("n_points", 128))
     n_example_points = int(training.get("n_example_points", 32))
     eval_interval = int(training.get("eval_interval", max(1, steps)))
+    log_interval = int(training.get("log_interval", 0))
+    gradient_clip_norm = float(training.get("gradient_clip_norm", 1.0))
     max_eval_points = int(config.evaluation.get("max_eval_points", 512))
     trajectory_query_start_index = int(
         config.evaluation.get("trajectory_query_start_index", n_example_points)
@@ -193,6 +195,7 @@ def run_configured_supervised_training(
     optimizer = torch.optim.Adam(built.model.parameters(), lr=learning_rate)
     train_losses: list[float] = []
     validation_losses: list[dict[str, float | int | str]] = []
+    latest_validation_losses: dict[str, float] = {}
 
     for step in range(1, steps + 1):
         batch = tuple(tensor.to(device) for tensor in next(train_iter))
@@ -200,22 +203,35 @@ def run_configured_supervised_training(
         optimizer.zero_grad(set_to_none=True)
         loss = built.loss_fn(built.model, batch, device)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(built.model.parameters(), 1.0)
+        if gradient_clip_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(built.model.parameters(), gradient_clip_norm)
         optimizer.step()
-        train_losses.append(float(loss.detach().cpu()))
+        train_loss = float(loss.detach().cpu())
+        train_losses.append(train_loss)
 
         if validation_batches and (step == steps or step % eval_interval == 0):
             built.model.eval()
             with torch.no_grad():
                 for scene, validation_batch in validation_batches.items():
                     validation_loss = built.loss_fn(built.model, validation_batch, device)
+                    validation_loss_value = float(validation_loss.detach().cpu())
+                    latest_validation_losses[scene] = validation_loss_value
                     validation_losses.append(
                         {
                             "step": step,
                             "scene": scene,
-                            "loss": float(validation_loss.detach().cpu()),
+                            "loss": validation_loss_value,
                         }
                     )
+        if log_interval > 0 and (step == 1 or step == steps or step % log_interval == 0):
+            message = f"step {step}/{steps} train_loss={train_loss:.6g}"
+            if latest_validation_losses:
+                validation_text = ", ".join(
+                    f"{scene}={loss_value:.6g}"
+                    for scene, loss_value in sorted(latest_validation_losses.items())
+                )
+                message += f" validation_loss[{validation_text}]"
+            print(message, flush=True)
 
     metrics: dict[str, object] = {
         "family": built.family,
@@ -227,6 +243,10 @@ def run_configured_supervised_training(
         "batch_size": batch_size,
         "n_points": n_points,
         "n_example_points": n_example_points,
+        "learning_rate": learning_rate,
+        "eval_interval": eval_interval,
+        "log_interval": log_interval,
+        "gradient_clip_norm": gradient_clip_norm,
         "trajectory_query_start_index": trajectory_query_start_index,
         "trajectory_example_policy": trajectory_example_policy,
         "train_losses": train_losses,

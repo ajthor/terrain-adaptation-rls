@@ -16,6 +16,31 @@ pip install git+https://github.com/ajthor/meta-learning.git
 ```
 
 ## Usage
+### Train a Function Encoder model.
+The current rewrite path uses config-driven training and writes plots, metrics,
+and checkpoints into `outputs/train/<timestamp>_<run-name>/`.
+
+Check GPU availability before using a CUDA device:
+```
+nvidia-smi
+```
+
+Then run the scaled FE config:
+```
+python3 -m terrain_adaptation_rls.experiments.train_fe --device cuda:0
+```
+
+For a short debug run without editing the config:
+```
+python3 -m terrain_adaptation_rls.experiments.train_fe --device cuda:0 --max-steps 100 --run-name fe_debug
+```
+
+The default config is `configs/train/warty_fe_scaled.json`.
+Useful outputs include `training_curve.png`, `validation_components.png`,
+`validation_trajectory_snapshot.png`, `validation_delta_scale.png`,
+`phase_streamplot.png`, `basis_streamplots.png`, `conditioning_summary.json`,
+and `trajectory_summary.json`.
+
 ### Pre-process training data from CSV files.
 The `terrain_adaptation_rls/data` directory contains data from different simulated (warty) and hardware (jackal_0770, bluebonnet) robotic platforms. 
 For faster data loading, pre-process and split datasets from each platform into train and test sets. This generates shuffled train and test datasets across different terrains. 
