@@ -1,168 +1,80 @@
 # Zero to Autonomy in Real-Time: Online Adaptation of Dynamics in Unstructured Environments
-Online terrain adaptation via function encoders with recursive least squares updates. 
 
-## Installation
-1. Create a conda environment.
-```
-conda create -n rlsenv --no-default-packages
-conda activate rlsenv
-```
-2. Install PyTorch from [pytorch.org](https://pytorch.org/get-started/locally/).
-3. Install Dependencies.
-```
-pip install --upgrade pip setuptools wheel
-pip install git+https://github.com/ajthor/function-encoder.git
-pip install git+https://github.com/ajthor/meta-learning.git
-```
+Online terrain adaptation via Function Encoders with recursive least-squares
+coefficient updates.
 
-## Usage
-### Train a Function Encoder model.
-The current rewrite path uses config-driven training and writes plots, metrics,
-and checkpoints into `outputs/train/<timestamp>_<run-name>/`.
+## Current Workflow
 
-Check GPU availability before using a CUDA device:
-```
+The rewrite path is config-driven and keeps generated artifacts under
+`outputs/`. Use the devcontainer when possible so training dependencies do not
+pollute the host Python install.
+
+Check GPU availability before launching CUDA jobs:
+
+```bash
 nvidia-smi
 ```
 
-Then run the scaled FE config:
-```
+Train the canonical scaled Function Encoder config:
+
+```bash
 python3 -m terrain_adaptation_rls.experiments.train_fe --device cuda:0
 ```
 
-For a short debug run without editing the config:
-```
-python3 -m terrain_adaptation_rls.experiments.train_fe --device cuda:0 --max-steps 100 --run-name fe_debug
+For a quick debug run without editing the config:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.train_fe \
+  --device cuda:0 \
+  --max-steps 100 \
+  --run-name fe_debug
 ```
 
-The default config is `configs/train/warty_fe_scaled.json`.
-Useful outputs include `training_curve.png`, `validation_components.png`,
-`validation_trajectory_snapshot.png`, `validation_delta_scale.png`,
-`phase_streamplot.png`, `basis_streamplots.png`, `conditioning_summary.json`,
-and `trajectory_summary.json`.
+Validate the config without creating artifacts:
 
-### Pre-process training data from CSV files.
-The `terrain_adaptation_rls/data` directory contains data from different simulated (warty) and hardware (jackal_0770, bluebonnet) robotic platforms. 
-For faster data loading, pre-process and split datasets from each platform into train and test sets. This generates shuffled train and test datasets across different terrains. 
-for models trained over 10 random seeds. 
-```
-python3 terrain_adaptation/shuffle_and_split_data.py
-```
-Note that there are three scripts for processing ROS bags in the `data` directory (extracting odometry and command velocity data). 
-
-### Train FE, NODE, and MAML models.
-To train individual models, run
-```
-python3 terrain_adaptation_rls/train.py
-```
-Arguments:
-- `seed`: sets the random seed for training and chooses the pre-split training data
-- `model`: `neural_ode`, `function_encoder`, or `maml`
-- `n_basis`: sets the number of basis functions for the FE and part of the hidden layer sizes for NODE and MAML
-- `gradsteps`: sets the number of gradient steps during training
-- `platform`: sets the robotic platform to train on (`warty` or `jackal_0770`)
-- `hidden_size`: parameter in choosing the number of neurons on the model layers
-- `inner_lr`: sets the inner learning rate for MAML
-- `inner_steps`: sets the number of inner steps that MAML takes during training.
-
-To train FE, NODE, and MAML models on each platform, run
-```
-./train_all.sh
+```bash
+python3 -m terrain_adaptation_rls.experiments.train_fe --dry-run
 ```
 
-### Evaluate Trained Models
-#### k-Step Errors in Simulation
-Evalute the simulation trained models on unseen data from an icy terrain (scene 1). Run 
-```
-python3 terrain_adaptation_rls/plot_error_k_step_with_adaptation.py
-```
-to evaluate each model's prediction accuracy over k-step rollouts over time across a 
-batch of initial states across the dataset. This plot provides intuition about the 
-expected MPPI performance when using each model to generate trajectory rollouts. 
+The default config is `configs/train/warty_fe_scaled.json`. Smaller debug
+configs live beside it in `configs/train/`.
 
-#### Single-Step Errors in Simulation
-Evaluate the simulation trained models on a scene that switches from ice (scene 1) to 
-pavement (scene 0) every 30 seconds. Run
-```
-python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
-```
-to generate the single-step and accumulated errors. Before running, set these parameters:
-- `inner_steps = 5`
-- `scene = 'scene0_to_scene1'`
-- `ex_scene = 'scene0'`
-- `platform = 'warty'`
+## Training Artifacts
 
-Then, to plot the single-step errors, run
-```
-python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial.py
-```
-Note that the terrain changes were recorded to a 
-`triggers.csv` file, saved when collecting data in the Unity simulator. 
+Training runs write to `outputs/train/<timestamp>_<run-name>/`. Useful files
+include:
 
-#### Multi-Panel Accumulated Single-Step Errors on Hardware
-Evaluate the hardware trained models on four scenes: grass, gym floor, mulch, and ice. 
-For each terrain, run
-```
-python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
-```
-to generate the single-step and accumulated errors. Before running, set these parameters:
-- `inner_steps = 1`
-- `scene = 'short_bags/grass'`, `'short_bags/gym_floor'`, `'short_bags/ice'`, OR `'short_bags/mulch'`
-- `ex_scene = 'grass'`, `'gym_floor'`, `'ice'`, OR `'mulch'`
-- `platform = 'jackal_0770'`
+- `function_encoder_model.pth`
+- `training_metrics.json`
+- `training_curve.png`
+- `validation_components.png`
+- `validation_trajectory_snapshot.png`
+- `validation_delta_scale.png`
+- `phase_streamplot.png`
+- `basis_streamplots.png`
+- `conditioning_summary.json`
+- `trajectory_summary.json`
 
-Then, to plot the errors, run
-```
-python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_panel.py
+The FE model contract is Phoenix-shaped: `(xs, dt) -> delta_state`. Static FE
+evaluation computes coefficients from example points, while FE-RLS starts from
+an online coefficient state and applies predict-before-update semantics.
+
+## Tests
+
+Run lightweight host tests:
+
+```bash
+python3 scripts/test_local.py
 ```
 
-#### Accumulated Single-Step Errors on Hardware (Changing Terrain)
-Evaluate the hardware trained models on a scene that changes between ice and turf (using
-hardware recorded during an autonomous mission at a local ice rink). Run
-```
-python3 terrain_adaptation_rls/eval_error_over_seeds_sequntial.py
-```
-to generate the single-step and accumulated errors. Before running, set these parameters:
-- `inner_steps = 1`
-- `scene = 'ice_autonomy_11'`
-- `ex_scene = 'turf'`
-- `platform = 'jackal_0770'`
+Run the full test suite inside the devcontainer:
 
-Then, the plot the errors, run
-```
-python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_ice_autonomy_11.py
-```
-And to generate an animated version of this plot, run
-```
-python3 terrain_adaptation_rls/plot_error_over_seeds_sequntial_ice_autonomy_11_animated.py
+```bash
+docker exec -w /workspaces/terrain-adaptation-rls busy_cohen python3 scripts/test_local.py
 ```
 
-#### FE-RLS Coefficients Over Time
-Evaluate how FE-RLS updates its coefficients over time (starting from zero prior knowledge) on different
-scenes by running
-```
-python3 terrain_adaptation_rls/eval_coeff_evolution_over_sequential.py
-```
-Specify the `scene` and the `platform`. 
+## Legacy Scripts
 
-Create an animated plot of the FE-RLS coefficient norm and single-step prediction error over time on 
-the `scene0_to_scene1_mission` scene by running
-```
-python3 terrain_adaptation_rls/plot_coeffs_and_error_animated.py
-```
-This plot shows that FE-RLS coefficients converge towards the batch-computed FE coefficients when the 
-terrain abruptly switches to ice. 
-
-Create a similar animated plot for hardware performance on `ice_autonomy_11` by running
-```
-python3 terrain_adaptation_rls/plot_coeffs_and_error_animated_jackal.py
-```
-In this scene, the norm of the coefficients is more noisy, and the convergence is less clear. 
-More work is needed in training FE models on hardware data. 
-
-
-### Other plotting functions.
-- To plot velocity profiles of the terrain data, use `terrain_adaptation_rls/plot_data.py`
-- To plot the velocities over time for a single terrain, use `terrain_adaptation_rls/plot_data_over_time.py`.
-- To evaluate predictive performance of the static models (FE and NODE) over different platform terrains and across models trained on many random seeds, use `terrain_adaptation_rls/plot_error_over_seeds_all_scenes.py`.
-- To evaluate k-step predictive performance of the static models (FE and NODE) over one terrain, use `terrain_adaptation_rls/plot_error_k_step.py`.
+The original student-written scripts remain in place as reference behavior, but
+they are no longer the preferred training/evaluation surface. See
+`legacy/README.md` and `legacy/script_audit.json` for the transition map.
