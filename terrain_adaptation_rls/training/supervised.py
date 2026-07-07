@@ -135,6 +135,15 @@ def run_configured_supervised_training(
             max_steps=max_steps,
             artifact_dir=artifact_dir,
         )
+    if family in {"neuralfly_style", "neuralfly"}:
+        from terrain_adaptation_rls.training.neuralfly import run_neuralfly_style_training
+
+        return run_neuralfly_style_training(
+            config,
+            device=device,
+            max_steps=max_steps,
+            artifact_dir=artifact_dir,
+        )
 
     if config.platform is None:
         raise ValueError("Real-data training requires config.platform")

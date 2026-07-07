@@ -1,0 +1,46 @@
+{
+  "name": "warty_neuralfly_scaled",
+  "kind": "train",
+  "platform": "warty",
+  "methods": [
+    "neuralfly_style_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "scene0",
+      "scene2",
+      "scene3",
+      "scene4"
+    ],
+    "validation_scenes": [
+      "scene1"
+    ],
+    "test_scenes": [
+      "scene5"
+    ],
+    "split_policy": "scene_holdout"
+  },
+  "model": {
+    "family": "neuralfly_style",
+    "n_basis": 8,
+    "hidden_size": 128,
+    "n_hidden_layers": 2,
+    "ridge": 1e-6
+  },
+  "training": {
+    "steps": 1000,
+    "batch_size": 4,
+    "learning_rate": 0.001,
+    "gradient_clip_norm": 1.0,
+    "n_points": 128,
+    "n_example_points": 128,
+    "eval_interval": 50,
+    "log_interval": 25
+  },
+  "evaluation": {
+    "max_eval_points": 512,
+    "trajectory_query_start_index": 128,
+    "trajectory_example_policy": "random_scene"
+  }
+}

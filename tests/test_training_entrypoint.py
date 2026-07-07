@@ -6,8 +6,10 @@ from pathlib import Path
 import unittest
 
 from terrain_adaptation_rls.experiments import train
+from terrain_adaptation_rls.experiments import eval_online_baselines
 from terrain_adaptation_rls.experiments import eval_fe_rls
 from terrain_adaptation_rls.experiments import train_fe
+from terrain_adaptation_rls.experiments import train_neuralfly
 from terrain_adaptation_rls.training import DistributedContext
 
 try:
@@ -155,6 +157,39 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn("valid FE train config", stdout.getvalue())
         self.assertFalse(output_dir.exists())
 
+    def test_train_neuralfly_dry_run_validates_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "train_neuralfly.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug_neuralfly",
+                        "kind": "train",
+                        "platform": "warty",
+                        "output_root": (Path(tmpdir) / "outputs").as_posix(),
+                        "model": {
+                            "family": "neuralfly_style",
+                            "hidden_size": 8,
+                            "n_basis": 2,
+                        },
+                        "training": {
+                            "steps": 1,
+                        },
+                    }
+                )
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = train_neuralfly.main(
+                    ["--config", config_path.as_posix(), "--dry-run"]
+                )
+
+            output_dir = Path(tmpdir) / "outputs"
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid NeuralFly-style train config", stdout.getvalue())
+        self.assertFalse(output_dir.exists())
+
     def test_eval_fe_rls_dry_run_validates_train_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             train_run_dir = Path(tmpdir) / "train_run"
@@ -178,6 +213,49 @@ class TrainingEntrypointTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertIn("valid FE-RLS eval", stdout.getvalue())
+
+    def test_eval_online_baselines_dry_run_validates_train_runs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fe_run_dir = Path(tmpdir) / "fe_train_run"
+            fe_run_dir.mkdir()
+            (fe_run_dir / "resolved_config.json").write_text(
+                json.dumps(
+                    {
+                        "name": "debug_fe",
+                        "kind": "train",
+                        "platform": "warty",
+                        "model": {"family": "function_encoder"},
+                    }
+                )
+            )
+            (fe_run_dir / "function_encoder_model.pth").write_bytes(b"placeholder")
+            neuralfly_run_dir = Path(tmpdir) / "neuralfly_train_run"
+            neuralfly_run_dir.mkdir()
+            (neuralfly_run_dir / "resolved_config.json").write_text(
+                json.dumps(
+                    {
+                        "name": "debug_neuralfly",
+                        "kind": "train",
+                        "platform": "warty",
+                        "model": {"family": "neuralfly_style"},
+                    }
+                )
+            )
+            (neuralfly_run_dir / "neuralfly_style_basis.pth").write_bytes(b"placeholder")
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = eval_online_baselines.main(
+                    [
+                        "--fe-run-dir",
+                        fe_run_dir.as_posix(),
+                        "--neuralfly-run-dir",
+                        neuralfly_run_dir.as_posix(),
+                        "--dry-run",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid online baseline eval", stdout.getvalue())
 
 
 if __name__ == "__main__":

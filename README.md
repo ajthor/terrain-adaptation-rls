@@ -21,6 +21,12 @@ Train the canonical scaled Function Encoder config:
 python3 -m terrain_adaptation_rls.experiments.train_fe --device cuda:0
 ```
 
+Train the NeuralFly-style learned-basis baseline:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.train_neuralfly --device cuda:0
+```
+
 For a quick debug run without editing the config:
 
 ```bash
@@ -30,14 +36,16 @@ python3 -m terrain_adaptation_rls.experiments.train_fe \
   --run-name fe_debug
 ```
 
-Validate the config without creating artifacts:
+Validate the configs without creating artifacts:
 
 ```bash
 python3 -m terrain_adaptation_rls.experiments.train_fe --dry-run
+python3 -m terrain_adaptation_rls.experiments.train_neuralfly --dry-run
 ```
 
-The default config is `configs/train/warty_fe_scaled.json`. Smaller debug
-configs live beside it in `configs/train/`.
+The default FE config is `configs/train/warty_fe_scaled.json`. The default
+NeuralFly-style config is `configs/train/warty_neuralfly_scaled.json`. Smaller
+debug configs live beside them in `configs/train/`.
 
 ## Training Artifacts
 
@@ -59,6 +67,10 @@ The FE model contract is Phoenix-shaped: `(xs, dt) -> delta_state`. Static FE
 evaluation computes coefficients from example points, while FE-RLS starts from
 an online coefficient state and applies predict-before-update semantics.
 
+The NeuralFly-style baseline uses the same runtime shape and update semantics:
+a learned basis maps `(xs, dt)` to features, and RLS adapts a low-dimensional
+coefficient vector online.
+
 ## FE-RLS Streaming Diagnostics
 
 After training an FE model, stream a scene through online FE-RLS:
@@ -74,6 +86,25 @@ python3 -m terrain_adaptation_rls.experiments.eval_fe_rls \
 This writes to `outputs/eval/<timestamp>_<run-name>/`. Useful files include
 `streaming_error.png`, `streaming_components.png`, `streaming_delta_scale.png`,
 `streaming_trajectory.png`, `rls_coefficients.png`, `summary.json`, and
+`streaming_predictions.csv`.
+
+## Baseline Comparisons
+
+Compare FE-RLS, NeuralFly-style RLS, no-training linear RLS, offline coefficient
+solves, and the zero-delta baseline with one command:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.eval_online_baselines \
+  --fe-run-dir outputs/train/<timestamp>_<fe-run-name> \
+  --neuralfly-run-dir outputs/train/<timestamp>_<neuralfly-run-name> \
+  --scene scene1 \
+  --device cuda:0 \
+  --run-name online_baselines_scene1
+```
+
+This writes `streaming_error.png`, `streaming_components.png`,
+`streaming_delta_scale.png`, `streaming_trajectory.png`,
+`coefficient_norms.png`, `summary.json`, `trajectory_summary.json`, and
 `streaming_predictions.csv`.
 
 ## Tests
