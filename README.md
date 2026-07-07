@@ -59,6 +59,23 @@ The FE model contract is Phoenix-shaped: `(xs, dt) -> delta_state`. Static FE
 evaluation computes coefficients from example points, while FE-RLS starts from
 an online coefficient state and applies predict-before-update semantics.
 
+## FE-RLS Streaming Diagnostics
+
+After training an FE model, stream a scene through online FE-RLS:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.eval_fe_rls \
+  --train-run-dir outputs/train/<timestamp>_<run-name> \
+  --scene scene1 \
+  --device cuda:0 \
+  --run-name fe_rls_scene1
+```
+
+This writes to `outputs/eval/<timestamp>_<run-name>/`. Useful files include
+`streaming_error.png`, `streaming_components.png`, `streaming_delta_scale.png`,
+`streaming_trajectory.png`, `rls_coefficients.png`, `summary.json`, and
+`streaming_predictions.csv`.
+
 ## Tests
 
 Run lightweight host tests:

@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 
 from terrain_adaptation_rls.experiments import train
+from terrain_adaptation_rls.experiments import eval_fe_rls
 from terrain_adaptation_rls.experiments import train_fe
 from terrain_adaptation_rls.training import DistributedContext
 
@@ -153,6 +154,30 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("valid FE train config", stdout.getvalue())
         self.assertFalse(output_dir.exists())
+
+    def test_eval_fe_rls_dry_run_validates_train_run(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_run_dir = Path(tmpdir) / "train_run"
+            train_run_dir.mkdir()
+            (train_run_dir / "resolved_config.json").write_text(
+                json.dumps(
+                    {
+                        "name": "debug_fe",
+                        "kind": "train",
+                        "platform": "warty",
+                        "model": {"family": "function_encoder"},
+                    }
+                )
+            )
+            (train_run_dir / "function_encoder_model.pth").write_bytes(b"placeholder")
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = eval_fe_rls.main(
+                    ["--train-run-dir", train_run_dir.as_posix(), "--dry-run"]
+                )
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid FE-RLS eval", stdout.getvalue())
 
 
 if __name__ == "__main__":
