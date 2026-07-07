@@ -117,6 +117,24 @@ This writes `streaming_error.png`, `streaming_components.png`,
 `streaming_trajectory_online.png`, `coefficient_norms.png`, `summary.json`,
 `trajectory_summary.json`, and `streaming_predictions.csv`.
 
+For reviewer-facing aggregate numbers, run the same comparison across the
+configured held-out scenes:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.eval_baseline_sweep \
+  --fe-run-dir outputs/train/<timestamp>_<fe-run-name> \
+  --neuralfly-run-dir outputs/train/<timestamp>_<neuralfly-run-name> \
+  --node-run-dir outputs/train/<timestamp>_<node-run-name> \
+  --split heldout \
+  --max-windows-per-scene 1 \
+  --device cuda:0 \
+  --run-name heldout_baselines
+```
+
+The sweep command writes one debug subdirectory per scene/window plus
+`window_metrics.csv`, `method_summary.csv`, `summary.json`,
+`mean_error_by_method.png`, and `mean_error_by_window.png`.
+
 ## Tests
 
 Run lightweight host tests:
