@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only run FE-RLS, skipping FE-Kalman, FE-SGD, and FE-window-LS.",
     )
     parser.add_argument("--kalman-process-noise", type=float, default=0.0)
-    parser.add_argument("--fe-sgd-learning-rate", type=float, default=1e-2)
+    parser.add_argument("--fe-sgd-learning-rate", type=float, default=1.0)
     parser.add_argument("--fe-sgd-momentum", type=float, default=0.0)
     parser.add_argument("--fe-sgd-weight-decay", type=float, default=0.0)
     parser.add_argument("--fe-window-size", type=int, default=100)
