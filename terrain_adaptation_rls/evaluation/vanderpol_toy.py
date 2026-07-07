@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -110,6 +111,16 @@ def run_vanderpol_toy_evaluation(
     n_query_points: int = 64,
     ridge: float = 1e-5,
     learning_rate: float = 1e-3,
+    optimizer_name: str = "adamw",
+    weight_decay: float = 1e-5,
+    gradient_clip: float = 1.0,
+    lr_schedule: str = "cosine",
+    warmup_steps: int = 100,
+    final_lr_fraction: float = 0.1,
+    validation_interval: int = 250,
+    validation_batches: int = 8,
+    validation_trajectories_per_mu: int = 4,
+    restore_best: bool = True,
     dt: float = 0.02,
     train_mus: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5),
     test_mus: tuple[float, ...] = (1.25, 3.0),
@@ -119,6 +130,7 @@ def run_vanderpol_toy_evaluation(
     forgetting_factor: float = 0.98,
     initial_covariance: float = 100.0,
     measurement_noise: float = 1e-5,
+    write_diagnostics: bool = True,
 ) -> ToyEvaluationResult:
     """Train toy bases and evaluate zero-coefficient RLS on held-out VDP tasks."""
 
@@ -133,6 +145,14 @@ def run_vanderpol_toy_evaluation(
         steps=train_trajectory_steps,
         dt=dt,
         seed=seed,
+        device=device,
+    )
+    validation_data = generate_vanderpol_task_data(
+        train_mus,
+        trajectories_per_mu=validation_trajectories_per_mu,
+        steps=train_trajectory_steps,
+        dt=dt,
+        seed=seed + 100_000,
         device=device,
     )
     methods: dict[str, torch.nn.Module] = {
@@ -157,19 +177,30 @@ def run_vanderpol_toy_evaluation(
             n_query_points=n_query_points,
             ridge=ridge,
             learning_rate=learning_rate,
+            optimizer_name=optimizer_name,
+            weight_decay=weight_decay,
+            gradient_clip=gradient_clip,
+            lr_schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+            validation_data=validation_data,
+            validation_interval=validation_interval,
+            validation_batches=validation_batches,
+            restore_best=restore_best,
             seed=seed + index,
             device=device,
         )
         for index, (name, model) in enumerate(methods.items())
     }
 
-    for name, model in methods.items():
-        write_basis_streamplots(
-            artifact_path / f"basis_streamplots_{name}.png",
-            model=model,
-            title=labels[name],
-            dt=dt,
-        )
+    if write_diagnostics:
+        for name, model in methods.items():
+            write_basis_streamplots(
+                artifact_path / f"basis_streamplots_{name}.png",
+                model=model,
+                title=labels[name],
+                dt=dt,
+            )
 
     rows: list[dict[str, object]] = []
     scenarios: dict[str, object] = {}
@@ -235,61 +266,63 @@ def run_vanderpol_toy_evaluation(
         scenario_predictions["zero_delta"] = zero_predictions
         scenario_errors["zero_delta"] = zero_errors
 
-        write_online_error_plot(
-            artifact_path / f"{scenario}_online_error.png",
-            scenario=scenario,
-            errors=scenario_errors,
-            labels=labels,
-        )
-        write_online_component_error_plot(
-            artifact_path / f"{scenario}_component_errors.png",
-            scenario=scenario,
-            predictions=scenario_predictions,
-            target=trajectory["deltas"],
-            labels=labels,
-        )
-        write_recursive_horizon_plot(
-            artifact_path / f"{scenario}_recursive_horizon_errors.png",
-            scenario=scenario,
-            rows=scenario_rows,
-        )
-        write_phase_plot(
-            artifact_path / f"{scenario}_phase_trajectory.png",
-            scenario=scenario,
-            trajectory=trajectory,
-            predictions=scenario_predictions,
-            labels=labels,
-        )
-        write_rollout_snapshot_plot(
-            artifact_path / f"{scenario}_rollout_snapshots.png",
-            scenario=scenario,
-            trajectory=trajectory,
-            methods=methods,
-            coefficient_histories=scenario_coefficients,
-            labels=labels,
-        )
-        write_streamplot_comparison(
-            artifact_path / f"{scenario}_streamplots.png",
-            scenario=scenario,
-            mu=mu,
-            trajectory=trajectory,
-            methods=methods,
-            coefficient_histories=scenario_coefficients,
-            labels=labels,
-            dt=dt,
-        )
+        if write_diagnostics:
+            write_online_error_plot(
+                artifact_path / f"{scenario}_online_error.png",
+                scenario=scenario,
+                errors=scenario_errors,
+                labels=labels,
+            )
+            write_online_component_error_plot(
+                artifact_path / f"{scenario}_component_errors.png",
+                scenario=scenario,
+                predictions=scenario_predictions,
+                target=trajectory["deltas"],
+                labels=labels,
+            )
+            write_recursive_horizon_plot(
+                artifact_path / f"{scenario}_recursive_horizon_errors.png",
+                scenario=scenario,
+                rows=scenario_rows,
+            )
+            write_phase_plot(
+                artifact_path / f"{scenario}_phase_trajectory.png",
+                scenario=scenario,
+                trajectory=trajectory,
+                predictions=scenario_predictions,
+                labels=labels,
+            )
+            write_rollout_snapshot_plot(
+                artifact_path / f"{scenario}_rollout_snapshots.png",
+                scenario=scenario,
+                trajectory=trajectory,
+                methods=methods,
+                coefficient_histories=scenario_coefficients,
+                labels=labels,
+            )
+            write_streamplot_comparison(
+                artifact_path / f"{scenario}_streamplots.png",
+                scenario=scenario,
+                mu=mu,
+                trajectory=trajectory,
+                methods=methods,
+                coefficient_histories=scenario_coefficients,
+                labels=labels,
+                dt=dt,
+            )
         scenarios[scenario] = {
             "mu": mu,
             "rows": scenario_rows,
         }
 
     write_rows_csv(artifact_path / "method_summary.csv", rows)
-    write_training_loss_plot(
-        artifact_path / "training_losses.png",
-        train_histories=train_histories,
-        labels=labels,
-    )
-    write_metric_bar_grid(artifact_path / "metric_summary_grid.png", rows)
+    if write_diagnostics:
+        write_training_loss_plot(
+            artifact_path / "training_losses.png",
+            train_histories=train_histories,
+            labels=labels,
+        )
+        write_metric_bar_grid(artifact_path / "metric_summary_grid.png", rows)
     summary = {
         "train_steps": train_steps,
         "seed": seed,
@@ -300,12 +333,25 @@ def run_vanderpol_toy_evaluation(
         "n_query_points": n_query_points,
         "ridge": ridge,
         "learning_rate": learning_rate,
+        "optimizer_name": optimizer_name,
+        "weight_decay": weight_decay,
+        "gradient_clip": gradient_clip,
+        "lr_schedule": lr_schedule,
+        "warmup_steps": warmup_steps,
+        "final_lr_fraction": final_lr_fraction,
+        "validation_interval": validation_interval,
+        "validation_batches": validation_batches,
+        "validation_trajectories_per_mu": validation_trajectories_per_mu,
+        "restore_best": restore_best,
         "dt": dt,
         "train_mus": list(train_mus),
         "test_mus": list(test_mus),
+        "train_trajectories_per_mu": train_trajectories_per_mu,
+        "train_trajectory_steps": train_trajectory_steps,
         "forgetting_factor": forgetting_factor,
         "initial_covariance": initial_covariance,
         "measurement_noise": measurement_noise,
+        "write_diagnostics": write_diagnostics,
         "train_histories": train_histories,
         "scenarios": scenarios,
     }
@@ -325,13 +371,45 @@ def train_toy_basis(
     n_query_points: int,
     ridge: float,
     learning_rate: float,
+    optimizer_name: str,
+    weight_decay: float,
+    gradient_clip: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+    validation_data: dict[float, VanDerPolTaskData],
+    validation_interval: int,
+    validation_batches: int,
+    restore_best: bool,
     seed: int,
     device: torch.device,
 ) -> dict[str, object]:
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = build_optimizer(
+        model,
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
     generator = torch.Generator(device=device).manual_seed(seed)
+    validation_generator = torch.Generator(device=device).manual_seed(seed + 50_000)
     losses: list[float] = []
-    for _ in range(steps):
+    learning_rates: list[float] = []
+    validation_steps: list[int] = []
+    validation_losses: list[float] = []
+    best_validation_loss = float("inf")
+    best_step: int | None = None
+    best_state: dict[str, torch.Tensor] | None = None
+
+    for step in range(1, steps + 1):
+        lr_scale = learning_rate_scale(
+            step=step,
+            total_steps=steps,
+            schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+        )
+        current_lr = learning_rate * lr_scale
+        set_optimizer_lr(optimizer, current_lr)
         batch = sample_task_batch(
             train_data,
             batch_size=batch_size,
@@ -344,12 +422,50 @@ def train_toy_basis(
         prediction = predict_with_solved_coefficients(model, batch, ridge=ridge)
         loss = torch.nn.functional.mse_loss(prediction, batch["query_y"])
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if gradient_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
         optimizer.step()
         losses.append(float(loss.detach().cpu()))
+        learning_rates.append(current_lr)
+
+        if should_validate(step, steps=steps, validation_interval=validation_interval):
+            validation_loss = evaluate_toy_basis_loss(
+                model,
+                validation_data=validation_data,
+                batches=validation_batches,
+                batch_size=batch_size,
+                n_example_points=n_example_points,
+                n_query_points=n_query_points,
+                ridge=ridge,
+                generator=validation_generator,
+                device=device,
+            )
+            validation_steps.append(step)
+            validation_losses.append(validation_loss)
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                best_state = clone_state_dict(model)
+
+    if restore_best and best_state is not None:
+        model.load_state_dict(best_state)
     return {
         "final_loss": losses[-1] if losses else None,
         "losses": losses,
+        "learning_rates": learning_rates,
+        "validation_steps": validation_steps,
+        "validation_losses": validation_losses,
+        "best_validation_loss": None
+        if best_step is None
+        else best_validation_loss,
+        "best_step": best_step,
+        "restored_best": bool(restore_best and best_state is not None),
+        "optimizer_name": optimizer_name,
+        "weight_decay": weight_decay,
+        "gradient_clip": gradient_clip,
+        "lr_schedule": lr_schedule,
+        "warmup_steps": warmup_steps,
+        "final_lr_fraction": final_lr_fraction,
     }
 
 
@@ -367,6 +483,89 @@ def predict_with_solved_coefficients(
     )
     query_features = model(RuntimeInput(batch["query_x"], batch["query_dt"]))
     return linear_predict(query_features, coefficients)
+
+
+def build_optimizer(
+    model: torch.nn.Module,
+    *,
+    optimizer_name: str,
+    learning_rate: float,
+    weight_decay: float,
+) -> torch.optim.Optimizer:
+    if optimizer_name == "adam":
+        return torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    if optimizer_name == "adamw":
+        return torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    raise ValueError(f"unknown optimizer: {optimizer_name}")
+
+
+def learning_rate_scale(
+    *,
+    step: int,
+    total_steps: int,
+    schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+) -> float:
+    if total_steps <= 0:
+        return 1.0
+    if warmup_steps > 0 and step <= warmup_steps:
+        return max(step / warmup_steps, 1e-6)
+    if schedule == "none":
+        return 1.0
+    if schedule != "cosine":
+        raise ValueError(f"unknown learning-rate schedule: {schedule}")
+    decay_steps = max(total_steps - max(warmup_steps, 0), 1)
+    decay_step = min(max(step - max(warmup_steps, 0), 0), decay_steps)
+    progress = decay_step / decay_steps
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return final_lr_fraction + (1.0 - final_lr_fraction) * cosine
+
+
+def set_optimizer_lr(optimizer: torch.optim.Optimizer, learning_rate: float) -> None:
+    for group in optimizer.param_groups:
+        group["lr"] = learning_rate
+
+
+def should_validate(step: int, *, steps: int, validation_interval: int) -> bool:
+    if validation_interval <= 0:
+        return step == steps
+    return step == steps or step % validation_interval == 0
+
+
+@torch.no_grad()
+def evaluate_toy_basis_loss(
+    model: torch.nn.Module,
+    *,
+    validation_data: dict[float, VanDerPolTaskData],
+    batches: int,
+    batch_size: int,
+    n_example_points: int,
+    n_query_points: int,
+    ridge: float,
+    generator: torch.Generator,
+    device: torch.device,
+) -> float:
+    losses: list[float] = []
+    for _ in range(max(batches, 1)):
+        batch = sample_task_batch(
+            validation_data,
+            batch_size=batch_size,
+            n_example_points=n_example_points,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        prediction = predict_with_solved_coefficients(model, batch, ridge=ridge)
+        losses.append(float(torch.nn.functional.mse_loss(prediction, batch["query_y"]).cpu()))
+    return _mean(losses)
+
+
+def clone_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        key: value.detach().cpu().clone()
+        for key, value in model.state_dict().items()
+    }
 
 
 @torch.no_grad()
@@ -628,6 +827,131 @@ def write_rows_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+def write_seed_sweep_summary(
+    artifact_dir: str | Path,
+    results: list[ToyEvaluationResult],
+) -> None:
+    artifact_path = Path(artifact_dir)
+    seed_rows: list[dict[str, object]] = []
+    for result in results:
+        seed = result.summary["seed"]
+        scenarios = result.summary["scenarios"]
+        assert isinstance(scenarios, dict)
+        for scenario_summary in scenarios.values():
+            assert isinstance(scenario_summary, dict)
+            rows = scenario_summary["rows"]
+            assert isinstance(rows, list)
+            for row in rows:
+                assert isinstance(row, dict)
+                seed_rows.append({"seed": seed, **row})
+
+    aggregate_rows = summarize_seed_sweep_rows(seed_rows)
+    write_rows_csv(artifact_path / "seed_method_summary.csv", seed_rows)
+    write_rows_csv(artifact_path / "aggregate_method_summary.csv", aggregate_rows)
+    write_seed_aggregate_metric_plot(
+        artifact_path / "aggregate_metric_summary.png",
+        aggregate_rows,
+    )
+    (artifact_path / "aggregate_summary.json").write_text(
+        json.dumps(
+            _jsonable(
+                {
+                    "n_seed_rows": len(seed_rows),
+                    "n_aggregate_rows": len(aggregate_rows),
+                    "aggregate_rows": aggregate_rows,
+                }
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+
+def summarize_seed_sweep_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    groups: dict[tuple[str, float, str, str], list[dict[str, object]]] = {}
+    for row in rows:
+        key = (
+            str(row["scenario"]),
+            float(row["mu"]),
+            str(row["method"]),
+            str(row["label"]),
+        )
+        groups.setdefault(key, []).append(row)
+
+    aggregate_rows: list[dict[str, object]] = []
+    for (scenario, mu, method, label), group_rows in sorted(groups.items()):
+        aggregate: dict[str, object] = {
+            "scenario": scenario,
+            "mu": mu,
+            "method": method,
+            "label": label,
+            "n_seeds": len({int(row["seed"]) for row in group_rows}),
+        }
+        metric_names = sorted(
+            {
+                key
+                for row in group_rows
+                for key, value in row.items()
+                if key not in {"seed", "scenario", "mu", "method", "label"}
+                and _is_float_like(value)
+            }
+        )
+        for metric in metric_names:
+            values = [float(row[metric]) for row in group_rows if metric in row]
+            finite_values = [value for value in values if math.isfinite(value)]
+            aggregate[f"{metric}_mean"] = _mean(finite_values) if finite_values else float("nan")
+            aggregate[f"{metric}_std"] = _std(finite_values)
+            aggregate[f"{metric}_nonfinite_count"] = len(values) - len(finite_values)
+        aggregate_rows.append(aggregate)
+    return aggregate_rows
+
+
+def write_seed_aggregate_metric_plot(path: Path, rows: list[dict[str, object]]) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    scenarios = []
+    for row in rows:
+        scenario = str(row["scenario"])
+        if scenario not in scenarios:
+            scenarios.append(scenario)
+    metrics = [
+        ("first_25_mean_error_mean", "first 25 online steps"),
+        ("mean_error_mean", "all online steps"),
+        ("recursive_k10_accumulated_error_mean_mean", "recursive k=10 accumulated"),
+    ]
+    fig, axes = plt.subplots(len(metrics), len(scenarios), figsize=(6 * len(scenarios), 8))
+    if len(scenarios) == 1:
+        axes = [[ax] for ax in axes]
+    for row_index, (metric, title) in enumerate(metrics):
+        for col_index, scenario in enumerate(scenarios):
+            ax = axes[row_index][col_index]
+            scenario_rows = [
+                row
+                for row in rows
+                if row["scenario"] == scenario and _is_float_like(row.get(metric))
+            ]
+            scenario_rows = sorted(scenario_rows, key=lambda row: float(row[metric]))
+            labels = [str(row["label"]) for row in scenario_rows]
+            values = [float(row[metric]) for row in scenario_rows]
+            std_key = metric.replace("_mean", "_std")
+            errors = [float(row.get(std_key, 0.0)) for row in scenario_rows]
+            ax.bar(range(len(labels)), values, yerr=errors, capsize=3)
+            finite_values = [value for value in values if math.isfinite(value) and value > 0.0]
+            if finite_values and max(finite_values) / max(min(finite_values), 1e-12) > 100.0:
+                ax.set_yscale("log")
+                ax.set_ylabel("error (log scale)")
+            ax.set_title(f"{scenario}: {title}")
+            ax.set_xticks(range(len(labels)))
+            ax.set_xticklabels(labels, rotation=35, ha="right")
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
 
 
 def write_online_error_plot(
@@ -1052,20 +1376,43 @@ def write_training_loss_plot(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    has_validation = any(history.get("validation_losses") for history in train_histories.values())
+    fig, axes = plt.subplots(2 if has_validation else 1, 1, figsize=(7, 6 if has_validation else 4))
+    if not isinstance(axes, list) and not hasattr(axes, "__len__"):
+        axes = [axes]
+    train_ax = axes[0]
     positive_values: list[float] = []
+    validation_positive: list[float] = []
     for name, history in train_histories.items():
         losses = [float(value) for value in history.get("losses", [])]
         if not losses:
             continue
         positive_values.extend(value for value in losses if value > 0.0)
-        ax.plot(losses, label=labels.get(name, name), linewidth=1.1)
+        train_ax.plot(losses, label=labels.get(name, name), linewidth=1.1)
+        if has_validation:
+            validation_steps = [int(value) for value in history.get("validation_steps", [])]
+            validation_losses = [float(value) for value in history.get("validation_losses", [])]
+            validation_positive.extend(value for value in validation_losses if value > 0.0)
+            axes[1].plot(
+                validation_steps,
+                validation_losses,
+                marker="o",
+                label=labels.get(name, name),
+                linewidth=1.1,
+            )
     if positive_values and max(positive_values) / max(min(positive_values), 1e-12) > 100.0:
-        ax.set_yscale("log")
-    ax.set_xlabel("training step")
-    ax.set_ylabel("query MSE")
-    ax.set_title("basis training losses")
-    ax.legend()
+        train_ax.set_yscale("log")
+    train_ax.set_xlabel("training step")
+    train_ax.set_ylabel("query MSE")
+    train_ax.set_title("basis training losses")
+    train_ax.legend()
+    if has_validation:
+        if validation_positive and max(validation_positive) / max(min(validation_positive), 1e-12) > 100.0:
+            axes[1].set_yscale("log")
+        axes[1].set_xlabel("training step")
+        axes[1].set_ylabel("validation query MSE")
+        axes[1].set_title("validation losses")
+        axes[1].legend()
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -1268,6 +1615,24 @@ def _mean(values: list[float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def _std(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean = _mean(values)
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _is_float_like(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        float(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float:

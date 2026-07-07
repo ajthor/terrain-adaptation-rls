@@ -11,6 +11,7 @@ try:
         NeuralFlyToyBasis,
         generate_vanderpol_trajectory,
         run_vanderpol_toy_evaluation,
+        write_seed_sweep_summary,
     )
     from terrain_adaptation_rls.methods.runtime import RuntimeInput
 except ModuleNotFoundError:
@@ -75,6 +76,11 @@ class VanDerPolToyTests(unittest.TestCase):
             )
             self.assertTrue((artifact_dir / "interpolation_mu_0.75_rollout_snapshots.png").exists())
             self.assertTrue((artifact_dir / "interpolation_mu_0.75_streamplots.png").exists())
+
+            write_seed_sweep_summary(artifact_dir, [result])
+            self.assertTrue((artifact_dir / "seed_method_summary.csv").exists())
+            self.assertTrue((artifact_dir / "aggregate_method_summary.csv").exists())
+            self.assertTrue((artifact_dir / "aggregate_metric_summary.png").exists())
 
 
 if __name__ == "__main__":
