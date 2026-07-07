@@ -118,7 +118,23 @@ def run_configured_supervised_training(
     max_steps: int | None = None,
     artifact_dir: str | Path | None = None,
 ) -> dict[str, object]:
-    """Train a configured supervised FE/NODE model on real scene data."""
+    """Train a configured supervised model on real scene data.
+
+    Function Encoder training now has an explicit implementation in
+    ``training.fe``. This compatibility entrypoint delegates FE configs there
+    and keeps the older generic path for NODE/debug use.
+    """
+
+    family = str(config.model.get("family", "neural_ode"))
+    if family in {"function_encoder", "fe"}:
+        from terrain_adaptation_rls.training.fe import run_function_encoder_training
+
+        return run_function_encoder_training(
+            config,
+            device=device,
+            max_steps=max_steps,
+            artifact_dir=artifact_dir,
+        )
 
     if config.platform is None:
         raise ValueError("Real-data training requires config.platform")

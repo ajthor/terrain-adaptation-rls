@@ -69,6 +69,26 @@ def write_supervised_diagnostics(
         )
 
 
+def write_fe_diagnostics(
+    artifact_dir: str | Path,
+    *,
+    model: torch.nn.Module,
+    batch: tuple[torch.Tensor, ...],
+    prediction: torch.Tensor,
+    scene: str,
+) -> None:
+    """Write the standard FE debug artifact set."""
+
+    write_supervised_diagnostics(
+        artifact_dir,
+        model=model,
+        family="function_encoder",
+        batch=batch,
+        prediction=prediction,
+        scene=scene,
+    )
+
+
 def integrate_planar_deltas(deltas: torch.Tensor) -> torch.Tensor:
     """Integrate ``[dx_body, dy_body, dyaw, ...]`` deltas into planar poses."""
 

@@ -63,9 +63,9 @@ def main(argv: list[str] | None = None) -> int:
         command="train_fe",
         run_name=args.run_name,
     )
-    from terrain_adaptation_rls.training.supervised import run_configured_supervised_training
+    from terrain_adaptation_rls.training.fe import run_function_encoder_training
 
-    metrics = run_configured_supervised_training(
+    metrics = run_function_encoder_training(
         prepared.config,
         device=args.device,
         max_steps=args.max_steps,
