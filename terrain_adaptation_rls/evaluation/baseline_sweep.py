@@ -331,10 +331,136 @@ def summarize_method_rows(rows: Iterable[Mapping[str, object]]) -> list[dict[str
     return sorted(summaries, key=lambda item: float(item["mean_error_mean"]))
 
 
+def summarize_method_rows_by_group(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    group_fields: tuple[str, ...] = ("split", "scene"),
+) -> list[dict[str, object]]:
+    """Aggregate method summaries independently for split/scene groups."""
+
+    grouped: dict[tuple[str, ...], list[Mapping[str, object]]] = {}
+    for row in rows:
+        key = tuple(str(row[field]) for field in group_fields)
+        grouped.setdefault(key, []).append(row)
+
+    summaries: list[dict[str, object]] = []
+    for key, group_rows in sorted(grouped.items()):
+        group_summary = summarize_method_rows(group_rows)
+        for method_row in group_summary:
+            prefix = dict(zip(group_fields, key))
+            summaries.append({**prefix, **method_row})
+    return summaries
+
+
+def summarize_reference_comparisons(
+    rows: Iterable[Mapping[str, object]],
+    *,
+    reference_method: str = "fe_rls",
+) -> list[dict[str, object]]:
+    """Summarize paired head-to-head comparisons against one reference method."""
+
+    rows = list(rows)
+    labels = {str(row["method"]): str(row["label"]) for row in rows}
+    grouped = group_rows_by_window(rows)
+    comparisons: dict[str, dict[str, object]] = {}
+
+    for window_rows in grouped.values():
+        by_method = {str(row["method"]): row for row in window_rows}
+        reference_row = by_method.get(reference_method)
+        if reference_row is None:
+            continue
+        reference_error = float(reference_row["mean_error"])
+
+        for method, row in by_method.items():
+            if method == reference_method:
+                continue
+            comparison_error = float(row["mean_error"])
+            comparison = comparisons.setdefault(
+                method,
+                {
+                    "reference_errors": [],
+                    "comparison_errors": [],
+                    "comparison_minus_reference": [],
+                    "reference_win_count": 0,
+                    "comparison_win_count": 0,
+                    "tie_count": 0,
+                },
+            )
+            reference_errors = comparison["reference_errors"]
+            comparison_errors = comparison["comparison_errors"]
+            deltas = comparison["comparison_minus_reference"]
+            assert isinstance(reference_errors, list)
+            assert isinstance(comparison_errors, list)
+            assert isinstance(deltas, list)
+            reference_errors.append(reference_error)
+            comparison_errors.append(comparison_error)
+            deltas.append(comparison_error - reference_error)
+
+            if reference_error < comparison_error:
+                comparison["reference_win_count"] = (
+                    int(comparison["reference_win_count"]) + 1
+                )
+            elif comparison_error < reference_error:
+                comparison["comparison_win_count"] = (
+                    int(comparison["comparison_win_count"]) + 1
+                )
+            else:
+                comparison["tie_count"] = int(comparison["tie_count"]) + 1
+
+    summaries: list[dict[str, object]] = []
+    for method, comparison in comparisons.items():
+        reference_errors = comparison["reference_errors"]
+        comparison_errors = comparison["comparison_errors"]
+        deltas = comparison["comparison_minus_reference"]
+        assert isinstance(reference_errors, list)
+        assert isinstance(comparison_errors, list)
+        assert isinstance(deltas, list)
+        reference_mean = mean(reference_errors)
+        comparison_mean = mean(comparison_errors)
+        summaries.append(
+            {
+                "reference_method": reference_method,
+                "reference_label": labels.get(reference_method, reference_method),
+                "comparison_method": method,
+                "comparison_label": labels.get(method, method),
+                "n_windows": len(deltas),
+                "reference_win_count": int(comparison["reference_win_count"]),
+                "comparison_win_count": int(comparison["comparison_win_count"]),
+                "tie_count": int(comparison["tie_count"]),
+                "reference_mean_error": reference_mean,
+                "comparison_mean_error": comparison_mean,
+                "comparison_minus_reference_mean_error": mean(deltas),
+                "comparison_minus_reference_median_error": median(deltas),
+                "comparison_minus_reference_std_error": _std(deltas),
+                "reference_relative_improvement": 1.0
+                - _safe_ratio(reference_mean, comparison_mean),
+            }
+        )
+
+    return sorted(
+        summaries,
+        key=lambda item: float(item["comparison_mean_error"]),
+    )
+
+
 def rank_methods_by_window(
     rows: Iterable[Mapping[str, object]],
 ) -> dict[str, list[int]]:
     """Rank methods independently within each scene/window."""
+
+    grouped = group_rows_by_window(rows)
+    ranks: dict[str, list[int]] = {}
+    for window_rows in grouped.values():
+        sorted_rows = sorted(window_rows, key=lambda row: float(row["mean_error"]))
+        for rank, row in enumerate(sorted_rows, start=1):
+            ranks.setdefault(str(row["method"]), []).append(rank)
+    return ranks
+
+
+def group_rows_by_window(
+    rows: Iterable[Mapping[str, object]],
+) -> dict[tuple[str, str, int, int], list[Mapping[str, object]]]:
+    """Group flattened method rows by split, scene, start, and window index."""
 
     grouped: dict[tuple[str, str, int, int], list[Mapping[str, object]]] = {}
     for row in rows:
@@ -345,13 +471,7 @@ def rank_methods_by_window(
             int(row.get("window_index", 0)),
         )
         grouped.setdefault(key, []).append(row)
-
-    ranks: dict[str, list[int]] = {}
-    for window_rows in grouped.values():
-        sorted_rows = sorted(window_rows, key=lambda row: float(row["mean_error"]))
-        for rank, row in enumerate(sorted_rows, start=1):
-            ranks.setdefault(str(row["method"]), []).append(rank)
-    return ranks
+    return grouped
 
 
 def write_sweep_artifacts(
@@ -364,6 +484,8 @@ def write_sweep_artifacts(
 ) -> None:
     """Write CSV, JSON, and aggregate plots for a baseline sweep."""
 
+    scene_summary = summarize_method_rows_by_group(rows)
+    pairwise_summary = summarize_reference_comparisons(rows)
     write_json(
         artifact_dir / "summary.json",
         {
@@ -371,10 +493,14 @@ def write_sweep_artifacts(
             "n_windows": len(windows),
             "windows": [window.__dict__ for window in windows],
             "method_summary": method_summary,
+            "scene_method_summary": scene_summary,
+            "pairwise_vs_fe_rls": pairwise_summary,
         },
     )
     write_rows_csv(artifact_dir / "window_metrics.csv", rows)
     write_rows_csv(artifact_dir / "method_summary.csv", method_summary)
+    write_rows_csv(artifact_dir / "scene_method_summary.csv", scene_summary)
+    write_rows_csv(artifact_dir / "pairwise_vs_fe_rls.csv", pairwise_summary)
     write_method_bar_plot(artifact_dir / "mean_error_by_method.png", method_summary)
     write_per_window_plot(artifact_dir / "mean_error_by_window.png", rows)
 

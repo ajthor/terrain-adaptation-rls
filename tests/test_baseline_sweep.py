@@ -4,7 +4,9 @@ from terrain_adaptation_rls.configuration import ExperimentConfig
 from terrain_adaptation_rls.evaluation.baseline_sweep import (
     rank_methods_by_window,
     resolve_scene_splits,
+    summarize_method_rows_by_group,
     summarize_method_rows,
+    summarize_reference_comparisons,
     window_starts,
 )
 
@@ -76,11 +78,53 @@ class BaselineSweepTests(unittest.TestCase):
         self.assertEqual(ranks["method_a"], [1, 2])
         self.assertEqual(ranks["method_b"], [2, 1])
 
+    def test_summarize_method_rows_by_group(self):
+        rows = [
+            _row("method_a", "A", 1.0, scene="scene0", window_index=0),
+            _row("zero_delta", "zero", 10.0, scene="scene0", window_index=0),
+            _row("method_a", "A", 3.0, scene="scene1", window_index=0),
+            _row("zero_delta", "zero", 6.0, scene="scene1", window_index=0),
+        ]
 
-def _row(method, label, mean_error, *, window_index):
+        summary = summarize_method_rows_by_group(rows)
+
+        self.assertEqual(summary[0]["split"], "test")
+        self.assertEqual(summary[0]["scene"], "scene0")
+        self.assertEqual(summary[0]["method"], "method_a")
+        self.assertAlmostEqual(summary[0]["relative_improvement_vs_zero_delta"], 0.9)
+        self.assertEqual(summary[2]["scene"], "scene1")
+        self.assertEqual(summary[2]["method"], "method_a")
+
+    def test_summarize_reference_comparisons(self):
+        rows = [
+            _row("fe_rls", "FE-RLS", 1.0, window_index=0),
+            _row("method_a", "A", 2.0, window_index=0),
+            _row("method_b", "B", 0.5, window_index=0),
+            _row("fe_rls", "FE-RLS", 2.0, window_index=1),
+            _row("method_a", "A", 3.0, window_index=1),
+            _row("method_b", "B", 2.5, window_index=1),
+        ]
+
+        summary = summarize_reference_comparisons(rows, reference_method="fe_rls")
+        by_method = {row["comparison_method"]: row for row in summary}
+
+        self.assertEqual(by_method["method_a"]["reference_win_count"], 2)
+        self.assertEqual(by_method["method_a"]["comparison_win_count"], 0)
+        self.assertAlmostEqual(
+            by_method["method_a"]["comparison_minus_reference_mean_error"],
+            1.0,
+        )
+        self.assertAlmostEqual(
+            by_method["method_a"]["reference_relative_improvement"],
+            1.0 - 1.5 / 2.5,
+        )
+        self.assertEqual(by_method["method_b"]["comparison_win_count"], 1)
+
+
+def _row(method, label, mean_error, *, window_index, scene="scene0"):
     return {
         "split": "test",
-        "scene": "scene0",
+        "scene": scene,
         "window_index": window_index,
         "start_index": 512 * window_index,
         "method": method,
