@@ -299,6 +299,11 @@ def summary_rows(
                 metrics["mean_error_to_zero_delta_ratio"]
             ),
         }
+        for key, value in metrics.items():
+            if key == "label" or key in row:
+                continue
+            if isinstance(value, (int, float)):
+                row[str(key)] = float(value)
         rows.append(row)
     return rows
 
@@ -327,25 +332,25 @@ def summarize_method_rows(rows: Iterable[Mapping[str, object]]) -> list[dict[str
         mses = [float(row["mse"]) for row in method_rows]
         method_mean = mean(mean_errors)
         ranks = ranks_by_method.get(method, [])
-        summaries.append(
-            {
-                "method": method,
-                "label": labels[method],
-                "n_windows": len(method_rows),
-                "win_count": sum(1 for rank in ranks if rank == 1),
-                "mean_rank": mean(ranks) if ranks else 0.0,
-                "mean_error_mean": method_mean,
-                "mean_error_median": median(mean_errors),
-                "mean_error_std": _std(mean_errors),
-                "final_accumulated_error_mean": mean(accumulated_errors),
-                "mse_mean": mean(mses),
-                "mean_error_to_zero_delta_ratio": _safe_ratio(method_mean, zero_mean),
-                "relative_improvement_vs_zero_delta": 1.0 - _safe_ratio(
-                    method_mean,
-                    zero_mean,
-                ),
-            }
-        )
+        summary = {
+            "method": method,
+            "label": labels[method],
+            "n_windows": len(method_rows),
+            "win_count": sum(1 for rank in ranks if rank == 1),
+            "mean_rank": mean(ranks) if ranks else 0.0,
+            "mean_error_mean": method_mean,
+            "mean_error_median": median(mean_errors),
+            "mean_error_std": _std(mean_errors),
+            "final_accumulated_error_mean": mean(accumulated_errors),
+            "mse_mean": mean(mses),
+            "mean_error_to_zero_delta_ratio": _safe_ratio(method_mean, zero_mean),
+            "relative_improvement_vs_zero_delta": 1.0 - _safe_ratio(
+                method_mean,
+                zero_mean,
+            ),
+        }
+        summary.update(_aggregate_extra_numeric_fields(method_rows, summary.keys()))
+        summaries.append(summary)
 
     return sorted(summaries, key=lambda item: float(item["mean_error_mean"]))
 
@@ -606,6 +611,56 @@ def write_per_window_plot(path: Path, rows: list[Mapping[str, object]]) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def _aggregate_extra_numeric_fields(
+    rows: list[Mapping[str, object]],
+    existing_summary_keys: Iterable[str],
+) -> dict[str, float]:
+    """Aggregate extra numeric per-window fields as ``<field>_mean`` columns."""
+
+    existing = set(existing_summary_keys)
+    skip_fields = {
+        "split",
+        "scene",
+        "window_index",
+        "start_index",
+        "n_steps",
+        "method",
+        "label",
+        "mean_error",
+        "final_accumulated_error",
+        "mse",
+        "mean_error_to_zero_delta_ratio",
+    }
+    numeric_fields: list[str] = []
+    for row in rows:
+        for key, value in row.items():
+            target_key = _aggregate_field_name(str(key))
+            if key in skip_fields or target_key in existing:
+                continue
+            if str(key).startswith("logged_k") and str(key).endswith("_n_windows"):
+                continue
+            if isinstance(value, (int, float)) and key not in numeric_fields:
+                numeric_fields.append(str(key))
+
+    summary: dict[str, float] = {}
+    for key in numeric_fields:
+        target_key = _aggregate_field_name(key)
+        values = [
+            float(row[key])
+            for row in rows
+            if key in row and isinstance(row[key], (int, float))
+        ]
+        if values:
+            summary[target_key] = mean(values)
+    return summary
+
+
+def _aggregate_field_name(field: str) -> str:
+    if field.startswith("logged_k") and field.endswith("_mean"):
+        return field
+    return f"{field}_mean"
 
 
 def _std(values: list[float]) -> float:

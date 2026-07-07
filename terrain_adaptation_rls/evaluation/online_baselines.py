@@ -17,6 +17,11 @@ from terrain_adaptation_rls.evaluation.fe_rls import (
     load_trained_function_encoder,
     scene_streaming_tensors,
 )
+from terrain_adaptation_rls.evaluation.metrics import (
+    DEFAULT_LOGGED_K_STEP_HORIZONS,
+    summarize_logged_k_step_metrics,
+    summarize_prediction_metrics,
+)
 from terrain_adaptation_rls.methods.runtime import (
     FunctionEncoderBasisProvider,
     LinearBasisProvider,
@@ -360,22 +365,43 @@ def summarize_baseline_predictions(
 
     target_delta = target.squeeze(0)
     zero_prediction = predictions.get("zero_delta", torch.zeros_like(target))
-    zero_error = torch.linalg.norm(zero_prediction.squeeze(0) - target_delta, dim=-1)
+    zero_prediction_delta = zero_prediction.squeeze(0)
+    zero_error = torch.linalg.norm(zero_prediction_delta - target_delta, dim=-1)
+    zero_metrics = summarize_prediction_metrics(
+        target=target_delta,
+        prediction=zero_prediction_delta,
+    )
 
     method_summaries: dict[str, object] = {}
     for name, prediction in predictions.items():
         prediction_delta = prediction.squeeze(0)
         error = torch.linalg.norm(prediction_delta - target_delta, dim=-1)
+        metrics = summarize_prediction_metrics(
+            target=target_delta,
+            prediction=prediction_delta,
+            zero_metrics=zero_metrics,
+        )
+        metrics.update(
+            summarize_logged_k_step_metrics(
+                target=target_delta,
+                prediction=prediction_delta,
+                horizons=DEFAULT_LOGGED_K_STEP_HORIZONS,
+            )
+        )
         method_summaries[name] = {
             "label": METHOD_LABELS.get(name, name),
-            "mean_error": float(error.mean()),
-            "final_accumulated_error": float(error.sum()),
-            "mean_error_to_zero_delta_ratio": _safe_ratio(
-                float(error.mean()),
-                float(zero_error.mean()),
-            ),
-            "mse": float(torch.nn.functional.mse_loss(prediction_delta, target_delta)),
+            **metrics,
         }
+        # Keep these aliases explicit for older notebooks and scripts.
+        method_summaries[name]["mean_error"] = float(error.mean())
+        method_summaries[name]["final_accumulated_error"] = float(error.sum())
+        method_summaries[name]["mean_error_to_zero_delta_ratio"] = _safe_ratio(
+            float(error.mean()),
+            float(zero_error.mean()),
+        )
+        method_summaries[name]["mse"] = float(
+            torch.nn.functional.mse_loss(prediction_delta, target_delta)
+        )
 
     coefficient_summaries: dict[str, object] = {}
     for name, history in coefficient_histories.items():
@@ -486,6 +512,10 @@ def write_online_baseline_artifacts(
         dt=dt,
         target=target,
         predictions=predictions,
+    )
+    write_logged_k_step_metrics_csv(
+        artifact_dir / "logged_k_step_metrics.csv",
+        summary=summary,
     )
 
 
@@ -761,6 +791,39 @@ def write_delta_time_summary(
             ),
         }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def write_logged_k_step_metrics_csv(
+    path: Path,
+    *,
+    summary: dict[str, object],
+) -> None:
+    """Write flattened logged-input k-step metrics for every method."""
+
+    methods = summary.get("methods", {})
+    rows: list[dict[str, object]] = []
+    if isinstance(methods, dict):
+        for method, method_summary in methods.items():
+            if not isinstance(method_summary, dict):
+                continue
+            row = {
+                "method": method,
+                "label": method_summary.get("label", method),
+            }
+            for key, value in method_summary.items():
+                if str(key).startswith("logged_k"):
+                    row[str(key)] = value
+            rows.append(row)
+
+    if not rows:
+        path.write_text("")
+        return
+    fieldnames = list(rows[0].keys())
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
 
 
 def _selected_prediction_names(

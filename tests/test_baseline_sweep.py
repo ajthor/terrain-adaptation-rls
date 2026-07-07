@@ -65,6 +65,31 @@ class BaselineSweepTests(unittest.TestCase):
         self.assertEqual(summary[0]["win_count"], 1)
         self.assertAlmostEqual(summary[0]["mean_rank"], 1.5)
 
+    def test_summarize_method_rows_aggregates_extra_metrics_readably(self):
+        rows = [
+            _row("method_a", "A", 2.0, window_index=0),
+            _row("zero_delta", "zero", 10.0, window_index=0),
+            _row("method_a", "A", 4.0, window_index=1),
+            _row("zero_delta", "zero", 8.0, window_index=1),
+        ]
+        rows[0]["p95_error"] = 3.0
+        rows[1]["p95_error"] = 11.0
+        rows[2]["p95_error"] = 5.0
+        rows[3]["p95_error"] = 9.0
+        rows[0]["logged_k10_endpoint_error_mean"] = 7.0
+        rows[1]["logged_k10_endpoint_error_mean"] = 20.0
+        rows[2]["logged_k10_endpoint_error_mean"] = 9.0
+        rows[3]["logged_k10_endpoint_error_mean"] = 18.0
+        rows[0]["logged_k10_n_windows"] = 42.0
+
+        summary = summarize_method_rows(rows)
+        method_a = summary[0]
+
+        self.assertAlmostEqual(method_a["p95_error_mean"], 4.0)
+        self.assertAlmostEqual(method_a["logged_k10_endpoint_error_mean"], 8.0)
+        self.assertNotIn("logged_k10_endpoint_error_mean_mean", method_a)
+        self.assertNotIn("logged_k10_n_windows_mean", method_a)
+
     def test_rank_methods_by_window(self):
         rows = [
             _row("method_a", "A", 1.0, window_index=0),
