@@ -55,6 +55,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fe-window-ridge", type=float, default=1e-6)
     parser.add_argument("--linear-no-bias", action="store_true")
     parser.add_argument(
+        "--skip-recursive-k-step",
+        action="store_true",
+        help="Skip recursive open-loop k-step rollout metrics for faster debugging.",
+    )
+    parser.add_argument(
+        "--recursive-k-step-horizons",
+        nargs="+",
+        type=int,
+        default=[1, 5, 10, 20, 50],
+        help="Recursive rollout horizons to summarize.",
+    )
+    parser.add_argument(
+        "--recursive-k-step-max-rollouts",
+        type=int,
+        default=64,
+        help="Maximum rollout start points per scene window for recursive k-step metrics.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate inputs and print resolved scenes/windows without creating artifacts.",
@@ -118,6 +136,9 @@ def main(argv: list[str] | None = None) -> int:
             "fe_window_size": args.fe_window_size,
             "fe_window_ridge": args.fe_window_ridge,
             "linear_include_bias": not args.linear_no_bias,
+            "include_recursive_k_step": not args.skip_recursive_k_step,
+            "recursive_k_step_horizons": args.recursive_k_step_horizons,
+            "recursive_k_step_max_rollouts": args.recursive_k_step_max_rollouts,
             "windows": [window.__dict__ for window in windows],
         },
     )
@@ -147,6 +168,9 @@ def main(argv: list[str] | None = None) -> int:
         fe_window_size=args.fe_window_size,
         fe_window_ridge=args.fe_window_ridge,
         linear_include_bias=not args.linear_no_bias,
+        include_recursive_k_step=not args.skip_recursive_k_step,
+        recursive_k_step_horizons=tuple(args.recursive_k_step_horizons),
+        recursive_k_step_max_rollouts=args.recursive_k_step_max_rollouts,
         progress=True,
     )
     print(result.artifact_dir)

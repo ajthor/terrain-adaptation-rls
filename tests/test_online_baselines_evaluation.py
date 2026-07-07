@@ -5,9 +5,16 @@ try:
 
     from terrain_adaptation_rls.evaluation.online_baselines import (
         summarize_baseline_predictions,
+        summarize_recursive_k_step_metrics,
     )
 except ModuleNotFoundError:
     torch = None
+
+
+class ZeroPredictor:
+    def predict(self, *, state, control, dt, start_index):
+        del state, control, dt, start_index
+        return torch.zeros(6)
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
@@ -37,6 +44,33 @@ class OnlineBaselineEvaluationTests(unittest.TestCase):
         self.assertEqual(
             summary["methods"]["zero_delta"]["mean_error_to_zero_delta_ratio"],
             1.0,
+        )
+
+    def test_summarize_recursive_k_step_metrics_uses_legacy_rollout_targets(self):
+        xs = torch.zeros(1, 4, 8)
+        dt = torch.ones(1, 4)
+        target = torch.ones(1, 4, 6)
+
+        summary = summarize_recursive_k_step_metrics(
+            xs=xs,
+            dt=dt,
+            target=target,
+            predictors={"zero": ZeroPredictor()},
+            horizons=(1, 2),
+            max_rollouts=2,
+        )
+
+        self.assertEqual(summary["zero"]["recursive_k1_n_rollouts"], 2.0)
+        self.assertEqual(summary["zero"]["recursive_k2_n_rollouts"], 2.0)
+        self.assertAlmostEqual(
+            summary["zero"]["recursive_k1_final_step_error_mean"],
+            6**0.5,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            summary["zero"]["recursive_k2_accumulated_error_mean"],
+            2 * 6**0.5,
+            places=6,
         )
 
 

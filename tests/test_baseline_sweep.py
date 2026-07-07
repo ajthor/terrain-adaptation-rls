@@ -81,14 +81,22 @@ class BaselineSweepTests(unittest.TestCase):
         rows[2]["logged_k10_endpoint_error_mean"] = 9.0
         rows[3]["logged_k10_endpoint_error_mean"] = 18.0
         rows[0]["logged_k10_n_windows"] = 42.0
+        rows[0]["recursive_k10_final_step_error_mean"] = 11.0
+        rows[1]["recursive_k10_final_step_error_mean"] = 30.0
+        rows[2]["recursive_k10_final_step_error_mean"] = 13.0
+        rows[3]["recursive_k10_final_step_error_mean"] = 28.0
+        rows[0]["recursive_k10_n_rollouts"] = 8.0
 
         summary = summarize_method_rows(rows)
         method_a = summary[0]
 
         self.assertAlmostEqual(method_a["p95_error_mean"], 4.0)
         self.assertAlmostEqual(method_a["logged_k10_endpoint_error_mean"], 8.0)
+        self.assertAlmostEqual(method_a["recursive_k10_final_step_error_mean"], 12.0)
         self.assertNotIn("logged_k10_endpoint_error_mean_mean", method_a)
         self.assertNotIn("logged_k10_n_windows_mean", method_a)
+        self.assertNotIn("recursive_k10_final_step_error_mean_mean", method_a)
+        self.assertNotIn("recursive_k10_n_rollouts_mean", method_a)
 
     def test_rank_methods_by_window(self):
         rows = [

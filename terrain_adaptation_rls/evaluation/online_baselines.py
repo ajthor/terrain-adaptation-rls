@@ -81,6 +81,9 @@ def run_online_baseline_comparison(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    include_recursive_k_step: bool = True,
+    recursive_k_step_horizons: tuple[int, ...] = (1, 5, 10, 20, 50),
+    recursive_k_step_max_rollouts: int = 64,
 ) -> OnlineBaselineArtifacts:
     """Compare trained and online update baselines on one held-out scene."""
 
@@ -117,10 +120,15 @@ def run_online_baseline_comparison(
 
     predictions: dict[str, torch.Tensor] = {}
     coefficient_histories: dict[str, torch.Tensor] = {}
+    recursive_predictors: dict[str, object] = {}
 
     fe_model = load_trained_function_encoder(fe_config, fe_run_dir, device=device)
     fe_coefficients, _ = fe_model.compute_coefficients((example_xs, example_dt), example_ys)
     predictions["offline_fe"] = fe_model((xs, dt), coefficients=fe_coefficients).detach().cpu()
+    recursive_predictors["offline_fe"] = _FixedCoefficientPredictor(
+        FunctionEncoderBasisProvider(fe_model),
+        fe_coefficients.detach(),
+    )
 
     fe_method = TorchCoefficientMethod(
         FunctionEncoderBasisProvider(fe_model),
@@ -136,6 +144,11 @@ def run_online_baseline_comparison(
         dt=dt,
         target=target,
         time=time,
+    )
+    recursive_predictors["fe_rls"] = _HistoryCoefficientPredictor(
+        FunctionEncoderBasisProvider(fe_model),
+        coefficient_histories["fe_rls"],
+        device=device,
     )
 
     if include_fe_variants:
@@ -176,6 +189,11 @@ def run_online_baseline_comparison(
                 target=target,
                 time=time,
             )
+            recursive_predictors[name] = _HistoryCoefficientPredictor(
+                fe_provider,
+                coefficient_histories[name],
+                device=device,
+            )
 
     if neuralfly_run_path is not None:
         neuralfly_config = load_config(neuralfly_run_path / "resolved_config.json")
@@ -190,6 +208,16 @@ def run_online_baseline_comparison(
             (xs, dt, target, example_xs, example_dt, example_ys),
             ridge=ridge,
         ).detach().cpu()
+        neuralfly_features = neuralfly_model(RuntimeInput(example_xs, example_dt))
+        neuralfly_coefficients = solve_ridge_coefficients(
+            neuralfly_features,
+            example_ys,
+            ridge=ridge,
+        )
+        recursive_predictors["offline_neuralfly"] = _FixedCoefficientPredictor(
+            neuralfly_model,
+            neuralfly_coefficients.detach(),
+        )
         neuralfly_method = TorchCoefficientMethod(
             neuralfly_model,
             update_rule="rls",
@@ -209,11 +237,17 @@ def run_online_baseline_comparison(
             target=target,
             time=time,
         )
+        recursive_predictors["neuralfly_rls"] = _HistoryCoefficientPredictor(
+            neuralfly_model,
+            coefficient_histories["neuralfly_rls"],
+            device=device,
+        )
 
     if node_run_path is not None:
         node_config = load_config(node_run_path / "resolved_config.json")
         node_model = load_trained_neural_ode(node_config, node_run_path, device=device)
         predictions["static_node"] = node_model((xs, dt)).detach().cpu()
+        recursive_predictors["static_node"] = _DirectModelPredictor(node_model)
 
     linear_provider = LinearBasisProvider(
         input_dim=9,
@@ -231,6 +265,10 @@ def run_online_baseline_comparison(
         linear_query_features,
         linear_coefficients,
     ).detach().cpu()
+    recursive_predictors["offline_linear"] = _FixedCoefficientPredictor(
+        linear_provider,
+        linear_coefficients.detach(),
+    )
 
     linear_method = TorchCoefficientMethod(
         linear_provider,
@@ -248,16 +286,35 @@ def run_online_baseline_comparison(
         target=target,
         time=time,
     )
+    recursive_predictors["linear_rls"] = _HistoryCoefficientPredictor(
+        linear_provider,
+        coefficient_histories["linear_rls"],
+        device=device,
+    )
 
     target_cpu = target.detach().cpu()
     dt_cpu = dt.detach().cpu()
     time_cpu = time.detach().cpu()
     predictions["zero_delta"] = torch.zeros_like(target_cpu)
+    recursive_predictors["zero_delta"] = _ZeroDeltaPredictor(device=device)
+    recursive_k_step_metrics = (
+        summarize_recursive_k_step_metrics(
+            xs=xs,
+            dt=dt,
+            target=target,
+            predictors=recursive_predictors,
+            horizons=recursive_k_step_horizons,
+            max_rollouts=recursive_k_step_max_rollouts,
+        )
+        if include_recursive_k_step
+        else {}
+    )
 
     summary = summarize_baseline_predictions(
         target=target_cpu,
         predictions=predictions,
         coefficient_histories=coefficient_histories,
+        recursive_k_step_metrics=recursive_k_step_metrics,
         scene=scene,
         forgetting_factor=forgetting_factor,
         initial_covariance=initial_covariance,
@@ -272,6 +329,9 @@ def run_online_baseline_comparison(
         fe_window_size=fe_window_size,
         fe_window_ridge=fe_window_ridge,
         linear_include_bias=linear_include_bias,
+        include_recursive_k_step=include_recursive_k_step,
+        recursive_k_step_horizons=recursive_k_step_horizons,
+        recursive_k_step_max_rollouts=recursive_k_step_max_rollouts,
     )
     write_online_baseline_artifacts(
         artifact_dir,
@@ -341,11 +401,92 @@ def stream_runtime_method(
     return torch.stack(predictions).unsqueeze(0), torch.stack(coefficients)
 
 
+@torch.no_grad()
+def summarize_recursive_k_step_metrics(
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    target: torch.Tensor,
+    predictors: dict[str, object],
+    horizons: tuple[int, ...],
+    max_rollouts: int,
+) -> dict[str, dict[str, float]]:
+    """Summarize recursive open-loop rollout error for each method."""
+
+    xs_single = xs.squeeze(0)
+    dt_single = dt.squeeze(0)
+    target_delta = target.squeeze(0)
+    n_steps = int(target_delta.shape[0])
+    valid_horizons = sorted({int(horizon) for horizon in horizons if 0 < int(horizon) <= n_steps})
+    if not valid_horizons or max_rollouts <= 0:
+        return {name: {} for name in predictors}
+
+    max_horizon = max(valid_horizons)
+    max_start = n_steps - max_horizon
+    if max_start < 0:
+        return {name: {} for name in predictors}
+
+    starts = torch.linspace(
+        0,
+        max_start,
+        steps=min(max_rollouts, max_start + 1),
+        device=xs_single.device,
+    ).round().to(torch.long).unique(sorted=True)
+    summaries: dict[str, dict[str, float]] = {}
+    for name, predictor in predictors.items():
+        method_summary: dict[str, float] = {}
+        horizon_errors: dict[int, list[float]] = {horizon: [] for horizon in valid_horizons}
+        horizon_accumulated: dict[int, list[float]] = {
+            horizon: [] for horizon in valid_horizons
+        }
+
+        for start_tensor in starts:
+            start = int(start_tensor.item())
+            state = xs_single[start, :6].clone()
+            step_errors: list[float] = []
+            for offset in range(max_horizon):
+                index = start + offset
+                control = xs_single[index, 6:]
+                delta = predictor.predict(
+                    state=state,
+                    control=control,
+                    dt=dt_single[index],
+                    start_index=start,
+                )
+                true_next = target_delta[index] + xs_single[index, :6]
+                predicted_next = torch.cat((delta[:3], state[3:6] + delta[3:6]))
+                step_errors.append(float(torch.linalg.norm(predicted_next - true_next)))
+                state = _roll_legacy_body_state(state, delta)
+
+                horizon = offset + 1
+                if horizon in horizon_errors:
+                    horizon_errors[horizon].append(step_errors[-1])
+                    horizon_accumulated[horizon].append(sum(step_errors))
+
+        for horizon in valid_horizons:
+            errors = horizon_errors[horizon]
+            accumulated = horizon_accumulated[horizon]
+            prefix = f"recursive_k{horizon}"
+            method_summary[f"{prefix}_n_rollouts"] = float(len(errors))
+            method_summary[f"{prefix}_final_step_error_mean"] = _mean(errors)
+            method_summary[f"{prefix}_final_step_error_median"] = _median(errors)
+            method_summary[f"{prefix}_final_step_error_p95"] = _quantile_list(errors, 0.95)
+            method_summary[f"{prefix}_accumulated_error_mean"] = _mean(accumulated)
+            method_summary[f"{prefix}_accumulated_error_median"] = _median(accumulated)
+            method_summary[f"{prefix}_accumulated_error_p95"] = _quantile_list(
+                accumulated,
+                0.95,
+            )
+        summaries[name] = method_summary
+    return summaries
+
+
 def summarize_baseline_predictions(
     *,
     target: torch.Tensor,
     predictions: dict[str, torch.Tensor],
     coefficient_histories: dict[str, torch.Tensor],
+    recursive_k_step_metrics: dict[str, dict[str, float]] | None = None,
     scene: str,
     forgetting_factor: float,
     initial_covariance: float,
@@ -360,6 +501,9 @@ def summarize_baseline_predictions(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    include_recursive_k_step: bool = True,
+    recursive_k_step_horizons: tuple[int, ...] = (1, 5, 10, 20, 50),
+    recursive_k_step_max_rollouts: int = 64,
 ) -> dict[str, object]:
     """Compute scalar metrics for all baseline predictions."""
 
@@ -388,6 +532,8 @@ def summarize_baseline_predictions(
                 horizons=DEFAULT_LOGGED_K_STEP_HORIZONS,
             )
         )
+        if recursive_k_step_metrics is not None:
+            metrics.update(recursive_k_step_metrics.get(name, {}))
         method_summaries[name] = {
             "label": METHOD_LABELS.get(name, name),
             **metrics,
@@ -438,6 +584,12 @@ def summarize_baseline_predictions(
         },
         "linear_baseline": {
             "include_bias": linear_include_bias,
+        },
+        "recursive_k_step": {
+            "include": include_recursive_k_step,
+            "horizons": list(recursive_k_step_horizons),
+            "max_rollouts": recursive_k_step_max_rollouts,
+            "rollout_update": "legacy_body_velocity_frame",
         },
     }
 
@@ -824,6 +976,174 @@ def write_logged_k_step_metrics_csv(
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+
+
+class _FixedCoefficientPredictor:
+    def __init__(self, feature_provider: object, coefficients: torch.Tensor) -> None:
+        self.feature_provider = feature_provider
+        self.coefficients = coefficients
+
+    def predict(
+        self,
+        *,
+        state: torch.Tensor,
+        control: torch.Tensor,
+        dt: torch.Tensor,
+        start_index: int,
+    ) -> torch.Tensor:
+        del start_index
+        return _coefficient_predict(
+            self.feature_provider,
+            self.coefficients,
+            state=state,
+            control=control,
+            dt=dt,
+        )
+
+
+class _HistoryCoefficientPredictor:
+    def __init__(
+        self,
+        feature_provider: object,
+        history: torch.Tensor,
+        *,
+        device: torch.device,
+    ) -> None:
+        self.feature_provider = feature_provider
+        self.history = history
+        self.device = device
+
+    def predict(
+        self,
+        *,
+        state: torch.Tensor,
+        control: torch.Tensor,
+        dt: torch.Tensor,
+        start_index: int,
+    ) -> torch.Tensor:
+        coefficients = self._coefficients_for_start(start_index)
+        return _coefficient_predict(
+            self.feature_provider,
+            coefficients,
+            state=state,
+            control=control,
+            dt=dt,
+        )
+
+    def _coefficients_for_start(self, start_index: int) -> torch.Tensor:
+        if start_index <= 0:
+            return torch.zeros(
+                1,
+                self.history.shape[-1],
+                dtype=self.history.dtype,
+                device=self.device,
+            )
+        index = min(start_index - 1, self.history.shape[0] - 1)
+        return self.history[index].to(self.device).unsqueeze(0)
+
+
+class _DirectModelPredictor:
+    def __init__(self, model: torch.nn.Module) -> None:
+        self.model = model
+
+    def predict(
+        self,
+        *,
+        state: torch.Tensor,
+        control: torch.Tensor,
+        dt: torch.Tensor,
+        start_index: int,
+    ) -> torch.Tensor:
+        del start_index
+        xs_step, dt_step = _rollout_input_tensors(state=state, control=control, dt=dt)
+        return self.model((xs_step, dt_step)).squeeze(0).squeeze(0)
+
+
+class _ZeroDeltaPredictor:
+    def __init__(self, *, device: torch.device) -> None:
+        self.device = device
+
+    def predict(
+        self,
+        *,
+        state: torch.Tensor,
+        control: torch.Tensor,
+        dt: torch.Tensor,
+        start_index: int,
+    ) -> torch.Tensor:
+        del state, control, dt, start_index
+        return torch.zeros(6, dtype=torch.float32, device=self.device)
+
+
+def _coefficient_predict(
+    feature_provider: object,
+    coefficients: torch.Tensor,
+    *,
+    state: torch.Tensor,
+    control: torch.Tensor,
+    dt: torch.Tensor,
+) -> torch.Tensor:
+    xs_step, dt_step = _rollout_input_tensors(state=state, control=control, dt=dt)
+    features = feature_provider(RuntimeInput(xs_step, dt_step))
+    coefficients = coefficients.to(device=features.device, dtype=features.dtype)
+    return linear_predict(features, coefficients).squeeze(0).squeeze(0)
+
+
+def _rollout_input_tensors(
+    *,
+    state: torch.Tensor,
+    control: torch.Tensor,
+    dt: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    xs_step = torch.cat((state, control)).reshape(1, 1, -1)
+    dt_step = dt.reshape(1, 1)
+    return xs_step, dt_step
+
+
+def _roll_legacy_body_state(state: torch.Tensor, delta: torch.Tensor) -> torch.Tensor:
+    next_velocity_in_current_frame = state[3:6] + delta[3:6]
+    next_velocity_body_frame = _inertial_to_body_single(
+        pose_delta=delta[:3],
+        vector=next_velocity_in_current_frame,
+    )
+    return torch.cat((torch.zeros_like(delta[:3]), next_velocity_body_frame))
+
+
+def _inertial_to_body_single(
+    *,
+    pose_delta: torch.Tensor,
+    vector: torch.Tensor,
+) -> torch.Tensor:
+    yaw = pose_delta[2]
+    cos_yaw = torch.cos(yaw)
+    sin_yaw = torch.sin(yaw)
+    return torch.stack(
+        (
+            cos_yaw * vector[0] + sin_yaw * vector[1],
+            -sin_yaw * vector[0] + cos_yaw * vector[1],
+            vector[2],
+        )
+    )
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    tensor = torch.tensor(values, dtype=torch.float32)
+    return float(tensor.median())
+
+
+def _quantile_list(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    tensor = torch.tensor(values, dtype=torch.float32)
+    return float(torch.quantile(tensor, q))
 
 
 def _selected_prediction_names(

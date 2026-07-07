@@ -55,6 +55,9 @@ def run_baseline_sweep(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    include_recursive_k_step: bool = True,
+    recursive_k_step_horizons: tuple[int, ...] = (1, 5, 10, 20, 50),
+    recursive_k_step_max_rollouts: int = 64,
     progress: bool = False,
 ) -> SweepArtifacts:
     """Run online baseline comparisons for multiple held-out scene windows."""
@@ -107,6 +110,9 @@ def run_baseline_sweep(
             fe_window_size=fe_window_size,
             fe_window_ridge=fe_window_ridge,
             linear_include_bias=linear_include_bias,
+            include_recursive_k_step=include_recursive_k_step,
+            recursive_k_step_horizons=recursive_k_step_horizons,
+            recursive_k_step_max_rollouts=recursive_k_step_max_rollouts,
         )
         if progress:
             methods = result.summary["methods"]
@@ -149,6 +155,9 @@ def run_baseline_sweep(
             "fe_window_size": fe_window_size,
             "fe_window_ridge": fe_window_ridge,
             "linear_include_bias": linear_include_bias,
+            "include_recursive_k_step": include_recursive_k_step,
+            "recursive_k_step_horizons": list(recursive_k_step_horizons),
+            "recursive_k_step_max_rollouts": recursive_k_step_max_rollouts,
             "progress": progress,
         },
     )
@@ -641,6 +650,8 @@ def _aggregate_extra_numeric_fields(
                 continue
             if str(key).startswith("logged_k") and str(key).endswith("_n_windows"):
                 continue
+            if str(key).startswith("recursive_k") and str(key).endswith("_n_rollouts"):
+                continue
             if isinstance(value, (int, float)) and key not in numeric_fields:
                 numeric_fields.append(str(key))
 
@@ -658,7 +669,7 @@ def _aggregate_extra_numeric_fields(
 
 
 def _aggregate_field_name(field: str) -> str:
-    if field.startswith("logged_k") and field.endswith("_mean"):
+    if field.startswith(("logged_k", "recursive_k")) and field.endswith("_mean"):
         return field
     return f"{field}_mean"
 
