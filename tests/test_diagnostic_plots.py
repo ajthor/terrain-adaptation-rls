@@ -6,6 +6,7 @@ try:
     from terrain_adaptation_rls.evaluation.diagnostic_plots import (
         integrate_planar_deltas,
         quantile_range,
+        summarize_trajectory_scales,
     )
 except ModuleNotFoundError:
     torch = None
@@ -44,6 +45,37 @@ class DiagnosticPlotTests(unittest.TestCase):
 
         self.assertLess(lower, 1.0)
         self.assertGreater(upper, 1.0)
+
+    def test_summarizes_tiny_prediction_scale(self):
+        target = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+            ]
+        ).transpose(0, 1)
+        prediction = torch.zeros_like(target)
+        dt = torch.full((1, 2), 0.1)
+
+        summary = summarize_trajectory_scales(
+            target=target,
+            prediction=prediction,
+            dt=dt,
+            scene="debug",
+        )
+
+        self.assertEqual(summary["n_steps"], 2)
+        self.assertEqual(summary["trajectory"]["target"]["path_length"], 2.0)
+        self.assertEqual(summary["trajectory"]["prediction"]["path_length"], 0.0)
+        self.assertEqual(summary["delta_norms"]["prediction_to_target_planar_ratio"], 0.0)
+        self.assertEqual(summary["delta_norms"]["prediction_error_to_zero_delta_error_ratio"], 1.0)
+        self.assertIn(
+            "prediction_planar_deltas_are_less_than_10_percent_of_target",
+            summary["flags"],
+        )
+        self.assertIn(
+            "prediction_error_is_within_5_percent_of_zero_delta_baseline",
+            summary["flags"],
+        )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from math import ceil
 from pathlib import Path
 
@@ -26,6 +27,20 @@ def write_supervised_diagnostics(
     xs, dt, target, *_ = batch
     error = torch.linalg.norm(prediction - target, dim=-1)
 
+    write_trajectory_summary(
+        artifact_dir / "trajectory_summary.json",
+        target=target,
+        prediction=prediction,
+        dt=dt,
+        scene=scene,
+    )
+    write_delta_scale_plot(
+        artifact_dir / "validation_delta_scale.png",
+        target=target,
+        prediction=prediction,
+        dt=dt,
+        scene=scene,
+    )
     write_error_histogram(artifact_dir / "validation_error_histogram.png", error)
     write_trajectory_snapshot(
         artifact_dir / "validation_trajectory_snapshot.png",
@@ -65,6 +80,147 @@ def integrate_planar_deltas(deltas: torch.Tensor) -> torch.Tensor:
     return poses
 
 
+def summarize_trajectory_scales(
+    *,
+    target: torch.Tensor,
+    prediction: torch.Tensor,
+    dt: torch.Tensor | None = None,
+    scene: str | None = None,
+) -> dict[str, object]:
+    """Summarize prediction-vs-target scale for one contiguous trajectory batch."""
+
+    target_delta = _single_trajectory(target)
+    prediction_delta = _single_trajectory(prediction)
+    if target_delta.shape != prediction_delta.shape:
+        raise ValueError(
+            "target and prediction shapes must match: "
+            f"{tuple(target_delta.shape)} != {tuple(prediction_delta.shape)}"
+        )
+
+    error_delta = prediction_delta - target_delta
+    zero_delta = torch.zeros_like(target_delta)
+    zero_error_delta = zero_delta - target_delta
+    target_pose = integrate_planar_deltas(target_delta)
+    prediction_pose = integrate_planar_deltas(prediction_delta)
+    zero_pose = integrate_planar_deltas(zero_delta)
+    target_planar_norm = torch.linalg.norm(target_delta[:, :2], dim=-1)
+    prediction_planar_norm = torch.linalg.norm(prediction_delta[:, :2], dim=-1)
+    error_mean = _mean_norm(error_delta)
+    zero_error_mean = _mean_norm(zero_error_delta)
+
+    summary: dict[str, object] = {
+        "scene": scene,
+        "n_steps": int(target_delta.shape[0]),
+        "dt": _dt_summary(dt),
+        "delta_norms": {
+            "target_mean": _mean_norm(target_delta),
+            "prediction_mean": _mean_norm(prediction_delta),
+            "error_mean": error_mean,
+            "zero_delta_error_mean": zero_error_mean,
+            "prediction_error_to_zero_delta_error_ratio": _safe_ratio(
+                error_mean,
+                zero_error_mean,
+            ),
+            "prediction_to_target_ratio": _safe_ratio(
+                _mean_norm(prediction_delta),
+                _mean_norm(target_delta),
+            ),
+            "target_planar_mean": float(target_planar_norm.mean()),
+            "prediction_planar_mean": float(prediction_planar_norm.mean()),
+            "prediction_to_target_planar_ratio": _safe_ratio(
+                float(prediction_planar_norm.mean()),
+                float(target_planar_norm.mean()),
+            ),
+        },
+        "trajectory": {
+            "target": _pose_summary(target_pose),
+            "prediction": _pose_summary(prediction_pose),
+            "zero_delta_baseline": _pose_summary(zero_pose),
+        },
+        "per_dimension": _per_dimension_summary(target_delta, prediction_delta),
+        "flags": [],
+    }
+
+    ratio = summary["delta_norms"]["prediction_to_target_planar_ratio"]
+    if ratio is not None and ratio < 0.1:
+        summary["flags"].append("prediction_planar_deltas_are_less_than_10_percent_of_target")
+    target_path = summary["trajectory"]["target"]["path_length"]
+    prediction_path = summary["trajectory"]["prediction"]["path_length"]
+    path_ratio = _safe_ratio(prediction_path, target_path)
+    summary["trajectory"]["prediction_to_target_path_length_ratio"] = path_ratio
+    if path_ratio is not None and path_ratio < 0.1:
+        summary["flags"].append("prediction_path_length_is_less_than_10_percent_of_target")
+    error_ratio = summary["delta_norms"]["prediction_error_to_zero_delta_error_ratio"]
+    if error_ratio is not None and 0.95 <= error_ratio <= 1.05:
+        summary["flags"].append("prediction_error_is_within_5_percent_of_zero_delta_baseline")
+    return summary
+
+
+def write_trajectory_summary(
+    path: str | Path,
+    *,
+    target: torch.Tensor,
+    prediction: torch.Tensor,
+    dt: torch.Tensor | None,
+    scene: str,
+) -> None:
+    """Write scale and displacement diagnostics for a trajectory comparison."""
+
+    summary = summarize_trajectory_scales(
+        target=target,
+        prediction=prediction,
+        dt=dt,
+        scene=scene,
+    )
+    path = Path(path)
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+
+def write_delta_scale_plot(
+    path: str | Path,
+    *,
+    target: torch.Tensor,
+    prediction: torch.Tensor,
+    dt: torch.Tensor,
+    scene: str,
+) -> None:
+    """Plot delta norms and cumulative planar distance for target/prediction."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    target_delta = _single_trajectory(target)
+    prediction_delta = _single_trajectory(prediction)
+    time = torch.cumsum(_single_time(dt), dim=0)
+    target_delta_norm = torch.linalg.norm(target_delta, dim=-1)
+    prediction_delta_norm = torch.linalg.norm(prediction_delta, dim=-1)
+    target_planar_distance = torch.cumsum(torch.linalg.norm(target_delta[:, :2], dim=-1), dim=0)
+    prediction_planar_distance = torch.cumsum(
+        torch.linalg.norm(prediction_delta[:, :2], dim=-1),
+        dim=0,
+    )
+
+    path = Path(path)
+    fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+    axes[0].plot(time.cpu(), target_delta_norm.cpu(), label="target")
+    axes[0].plot(time.cpu(), prediction_delta_norm.cpu(), label="prediction")
+    axes[0].set_ylabel("delta norm")
+    axes[0].set_yscale("log")
+    axes[0].legend()
+
+    axes[1].plot(time.cpu(), target_planar_distance.cpu(), label="target")
+    axes[1].plot(time.cpu(), prediction_planar_distance.cpu(), label="prediction")
+    axes[1].set_xlabel("relative time [s]")
+    axes[1].set_ylabel("cumulative planar delta")
+    axes[1].legend()
+    fig.suptitle(scene)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def write_error_histogram(path: str | Path, error: torch.Tensor) -> None:
     """Write a histogram of one-step prediction error norms."""
 
@@ -81,6 +237,88 @@ def write_error_histogram(path: str | Path, error: torch.Tensor) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def _single_trajectory(value: torch.Tensor) -> torch.Tensor:
+    value = value.squeeze(0).detach().cpu()
+    if value.ndim != 2:
+        raise ValueError(f"expected one trajectory with shape [steps, dim], got {tuple(value.shape)}")
+    return value
+
+
+def _single_time(dt: torch.Tensor) -> torch.Tensor:
+    value = dt.squeeze(0).detach().cpu()
+    if value.ndim != 1:
+        raise ValueError(f"expected dt with shape [steps], got {tuple(value.shape)}")
+    return value
+
+
+def _dt_summary(dt: torch.Tensor | None) -> dict[str, float] | None:
+    if dt is None:
+        return None
+    values = _single_time(dt)
+    return {
+        "mean": float(values.mean()),
+        "min": float(values.min()),
+        "max": float(values.max()),
+        "total": float(values.sum()),
+    }
+
+
+def _mean_norm(value: torch.Tensor) -> float:
+    return float(torch.linalg.norm(value, dim=-1).mean())
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    if abs(denominator) < 1e-12:
+        return None
+    return numerator / denominator
+
+
+def _pose_summary(poses: torch.Tensor) -> dict[str, float]:
+    planar_steps = poses[1:, :2] - poses[:-1, :2]
+    final_xy = poses[-1, :2]
+    return {
+        "final_x": float(poses[-1, 0]),
+        "final_y": float(poses[-1, 1]),
+        "final_yaw": float(poses[-1, 2]),
+        "final_displacement": float(torch.linalg.norm(final_xy)),
+        "path_length": float(torch.linalg.norm(planar_steps, dim=-1).sum()),
+    }
+
+
+def _per_dimension_summary(
+    target_delta: torch.Tensor,
+    prediction_delta: torch.Tensor,
+) -> list[dict[str, float | str | None]]:
+    summaries: list[dict[str, float | str | None]] = []
+    error_delta = prediction_delta - target_delta
+    for dim in range(target_delta.shape[-1]):
+        target_values = target_delta[:, dim]
+        prediction_values = prediction_delta[:, dim]
+        target_mean_abs = float(target_values.abs().mean())
+        prediction_mean_abs = float(prediction_values.abs().mean())
+        label = STATE_LABELS[dim] if dim < len(STATE_LABELS) else f"dim {dim}"
+        summaries.append(
+            {
+                "dim": dim,
+                "label": label,
+                "target_mean_abs": target_mean_abs,
+                "prediction_mean_abs": prediction_mean_abs,
+                "prediction_to_target_mean_abs_ratio": _safe_ratio(
+                    prediction_mean_abs,
+                    target_mean_abs,
+                ),
+                "target_rms": float(torch.sqrt(torch.mean(target_values.square()))),
+                "prediction_rms": float(torch.sqrt(torch.mean(prediction_values.square()))),
+                "error_rms": float(torch.sqrt(torch.mean(error_delta[:, dim].square()))),
+                "target_min": float(target_values.min()),
+                "target_max": float(target_values.max()),
+                "prediction_min": float(prediction_values.min()),
+                "prediction_max": float(prediction_values.max()),
+            }
+        )
+    return summaries
 
 
 def write_trajectory_snapshot(
