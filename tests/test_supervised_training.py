@@ -9,6 +9,7 @@ try:
         build_model_from_config,
         run_synthetic_supervised_training,
         scene_sequence_batch,
+        scene_trajectory_batch,
         synthetic_batch,
     )
 except ModuleNotFoundError:
@@ -86,6 +87,51 @@ class SupervisedTrainingTests(unittest.TestCase):
         self.assertTrue(torch.allclose(dt, torch.full((1, 3), 0.1)))
         self.assertTrue(torch.allclose(ys[0, :, 0], torch.tensor([2.0, 3.0, 4.0])))
         self.assertEqual(tuple(example_xs.shape), (1, 2, 8))
+
+    def test_scene_trajectory_batch_uses_random_examples_outside_query(self):
+        inputs = torch.zeros(10, 9)
+        targets = torch.zeros(10, 7)
+        inputs[:, 0] = torch.arange(10)
+        inputs[:, 1] = torch.arange(10)
+        targets[:, 0] = torch.arange(10) + 0.1
+        targets[:, 1] = torch.arange(10)
+
+        batch = scene_trajectory_batch(
+            inputs=inputs,
+            targets=targets,
+            n_example_points=2,
+            max_query_points=3,
+            device="cpu",
+            query_start_index=2,
+            example_policy="random_scene",
+            seed=0,
+        )
+
+        xs, _, _, example_xs, *_ = batch
+        self.assertTrue(torch.allclose(xs[0, :, 0], torch.tensor([2.0, 3.0, 4.0])))
+        for row_id in example_xs[0, :, 0].tolist():
+            self.assertNotIn(row_id, [2.0, 3.0, 4.0])
+
+    def test_scene_trajectory_batch_can_use_preceding_examples(self):
+        inputs = torch.zeros(10, 9)
+        targets = torch.zeros(10, 7)
+        inputs[:, 0] = torch.arange(10)
+        inputs[:, 1] = torch.arange(10)
+        targets[:, 0] = torch.arange(10) + 0.1
+
+        batch = scene_trajectory_batch(
+            inputs=inputs,
+            targets=targets,
+            n_example_points=2,
+            max_query_points=3,
+            device="cpu",
+            query_start_index=4,
+            example_policy="preceding",
+        )
+
+        xs, _, _, example_xs, *_ = batch
+        self.assertTrue(torch.allclose(example_xs[0, :, 0], torch.tensor([2.0, 3.0])))
+        self.assertTrue(torch.allclose(xs[0, :, 0], torch.tensor([4.0, 5.0, 6.0])))
 
 
 if __name__ == "__main__":

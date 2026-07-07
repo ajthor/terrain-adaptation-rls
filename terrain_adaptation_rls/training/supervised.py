@@ -145,6 +145,12 @@ def run_configured_supervised_training(
     n_example_points = int(training.get("n_example_points", 32))
     eval_interval = int(training.get("eval_interval", max(1, steps)))
     max_eval_points = int(config.evaluation.get("max_eval_points", 512))
+    trajectory_query_start_index = int(
+        config.evaluation.get("trajectory_query_start_index", n_example_points)
+    )
+    trajectory_example_policy = str(
+        config.evaluation.get("trajectory_example_policy", "random_scene")
+    )
 
     train_data = load_scenes(train_scenes, config.platform)
     train_inputs = [train_data[scene][0] for scene in train_scenes]
@@ -171,12 +177,15 @@ def run_configured_supervised_training(
         for scene, (inputs, targets) in validation_data.items()
     }
     validation_artifact_batches = {
-        scene: scene_sequence_batch(
+        scene: scene_trajectory_batch(
             inputs=inputs,
             targets=targets,
             n_example_points=n_example_points,
             max_query_points=max_eval_points,
             device=device,
+            query_start_index=trajectory_query_start_index,
+            example_policy=trajectory_example_policy,
+            seed=config.seed,
         )
         for scene, (inputs, targets) in validation_data.items()
     }
@@ -218,6 +227,8 @@ def run_configured_supervised_training(
         "batch_size": batch_size,
         "n_points": n_points,
         "n_example_points": n_example_points,
+        "trajectory_query_start_index": trajectory_query_start_index,
+        "trajectory_example_policy": trajectory_example_policy,
         "train_losses": train_losses,
         "validation_losses": validation_losses,
         "final_train_loss": train_losses[-1] if train_losses else None,
@@ -336,6 +347,61 @@ def scene_sequence_batch(
 
     example_indices = torch.arange(start_index, query_start)
     query_indices = torch.arange(query_start, query_stop)
+    return scene_batch_from_indices(
+        inputs=inputs,
+        targets=targets,
+        example_indices=example_indices,
+        query_indices=query_indices,
+        device=device,
+    )
+
+
+def scene_trajectory_batch(
+    *,
+    inputs: torch.Tensor,
+    targets: torch.Tensor,
+    n_example_points: int,
+    max_query_points: int,
+    device: torch.device | str,
+    query_start_index: int = 0,
+    example_policy: str = "random_scene",
+    seed: int = 0,
+) -> tuple[torch.Tensor, ...]:
+    """Build a contiguous query batch with explicit FE conditioning semantics."""
+
+    if inputs.shape[0] != targets.shape[0]:
+        raise ValueError("inputs and targets must have the same row count")
+    if n_example_points <= 0:
+        raise ValueError("n_example_points must be positive")
+    if max_query_points <= 0:
+        raise ValueError("max_query_points must be positive")
+    if query_start_index < 0:
+        raise ValueError("query_start_index must be non-negative")
+
+    query_stop = min(query_start_index + max_query_points, inputs.shape[0])
+    if query_start_index >= inputs.shape[0] or query_stop <= query_start_index:
+        raise ValueError("scene does not contain enough points for a contiguous query segment")
+
+    query_indices = torch.arange(query_start_index, query_stop)
+    if example_policy == "random_scene":
+        available = torch.ones(inputs.shape[0], dtype=torch.bool)
+        available[query_indices] = False
+        available_indices = torch.arange(inputs.shape[0])[available]
+        if available_indices.numel() < n_example_points:
+            raise ValueError("scene does not contain enough non-query points for random examples")
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        permutation = torch.randperm(available_indices.numel(), generator=generator)
+        example_indices = available_indices[permutation[:n_example_points]]
+    elif example_policy == "preceding":
+        if query_start_index < n_example_points:
+            raise ValueError("preceding examples require query_start_index >= n_example_points")
+        example_indices = torch.arange(query_start_index - n_example_points, query_start_index)
+    else:
+        raise ValueError(
+            "unknown trajectory example policy "
+            f"'{example_policy}'; expected 'random_scene' or 'preceding'"
+        )
+
     return scene_batch_from_indices(
         inputs=inputs,
         targets=targets,

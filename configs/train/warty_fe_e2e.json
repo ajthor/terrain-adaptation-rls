@@ -34,6 +34,8 @@
     "eval_interval": 1
   },
   "evaluation": {
-    "max_eval_points": 256
+    "max_eval_points": 256,
+    "trajectory_query_start_index": 32,
+    "trajectory_example_policy": "random_scene"
   }
 }

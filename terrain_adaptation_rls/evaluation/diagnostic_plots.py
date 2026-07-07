@@ -27,6 +27,14 @@ def write_supervised_diagnostics(
     xs, dt, target, *_ = batch
     error = torch.linalg.norm(prediction - target, dim=-1)
 
+    write_conditioning_summary(
+        artifact_dir / "conditioning_summary.json",
+        model=model,
+        family=family,
+        batch=batch,
+        prediction=prediction,
+        scene=scene,
+    )
     write_trajectory_summary(
         artifact_dir / "trajectory_summary.json",
         target=target,
@@ -176,6 +184,103 @@ def write_trajectory_summary(
     path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
+@torch.no_grad()
+def write_conditioning_summary(
+    path: str | Path,
+    *,
+    model: torch.nn.Module,
+    family: str,
+    batch: tuple[torch.Tensor, ...],
+    prediction: torch.Tensor,
+    scene: str,
+) -> None:
+    """Write scale diagnostics for the query and FE conditioning examples."""
+
+    summary = summarize_conditioning(
+        model=model,
+        family=family,
+        batch=batch,
+        prediction=prediction,
+        scene=scene,
+    )
+    path = Path(path)
+    path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+
+
+@torch.no_grad()
+def summarize_conditioning(
+    *,
+    model: torch.nn.Module,
+    family: str,
+    batch: tuple[torch.Tensor, ...],
+    prediction: torch.Tensor,
+    scene: str | None = None,
+) -> dict[str, object]:
+    """Summarize the scale of examples, queries, coefficients, and predictions."""
+
+    xs, dt, target, example_xs, example_dt, example_ys = batch
+    zero_prediction = torch.zeros_like(prediction)
+    example_target_norm = _batched_mean_norm(example_ys)
+    query_target_norm = _batched_mean_norm(target)
+    prediction_norm = _batched_mean_norm(prediction)
+    summary: dict[str, object] = {
+        "scene": scene,
+        "family": family,
+        "examples": {
+            "n_points": int(example_ys.shape[1]),
+            "target_norm_mean": example_target_norm,
+            "target_abs_mean": _mean_abs(example_ys),
+            "dt": _batched_time_summary(example_dt),
+        },
+        "query": {
+            "n_points": int(target.shape[1]),
+            "target_norm_mean": query_target_norm,
+            "target_abs_mean": _mean_abs(target),
+            "prediction_norm_mean": prediction_norm,
+            "prediction_abs_mean": _mean_abs(prediction),
+            "prediction_to_target_norm_ratio": _safe_ratio(
+                prediction_norm,
+                query_target_norm,
+            ),
+            "mse": _mse(prediction, target),
+            "zero_delta_mse": _mse(zero_prediction, target),
+            "mse_to_zero_delta_mse_ratio": _safe_ratio(
+                _mse(prediction, target),
+                _mse(zero_prediction, target),
+            ),
+            "dt": _batched_time_summary(dt),
+        },
+        "example_to_query_target_norm_ratio": _safe_ratio(
+            example_target_norm,
+            query_target_norm,
+        ),
+        "flags": [],
+    }
+
+    example_query_ratio = summary["example_to_query_target_norm_ratio"]
+    if example_query_ratio is not None and example_query_ratio < 0.1:
+        summary["flags"].append("conditioning_examples_are_less_than_10_percent_of_query_scale")
+    if example_query_ratio is not None and example_query_ratio > 10.0:
+        summary["flags"].append("conditioning_examples_are_more_than_10x_query_scale")
+
+    if family == "function_encoder":
+        coefficients, _ = model.compute_coefficients((example_xs, example_dt), example_ys)
+        basis = model.basis_functions((example_xs, example_dt))
+        example_prediction = model((example_xs, example_dt), coefficients=coefficients)
+        coefficient_norms = torch.linalg.norm(coefficients.detach(), dim=-1).cpu()
+        summary["function_encoder"] = {
+            "coefficient_norms": [float(value) for value in coefficient_norms],
+            "coefficient_abs_mean": _mean_abs(coefficients),
+            "coefficient_abs_max": _max_abs(coefficients),
+            "basis_example_abs_mean": _mean_abs(basis),
+            "basis_example_abs_max": _max_abs(basis),
+            "example_prediction_norm_mean": _batched_mean_norm(example_prediction),
+            "example_mse": _mse(example_prediction, example_ys),
+        }
+
+    return summary
+
+
 def write_delta_scale_plot(
     path: str | Path,
     *,
@@ -265,8 +370,33 @@ def _dt_summary(dt: torch.Tensor | None) -> dict[str, float] | None:
     }
 
 
+def _batched_time_summary(dt: torch.Tensor) -> dict[str, float]:
+    values = dt.detach().float().cpu()
+    return {
+        "mean": float(values.mean()),
+        "min": float(values.min()),
+        "max": float(values.max()),
+    }
+
+
 def _mean_norm(value: torch.Tensor) -> float:
     return float(torch.linalg.norm(value, dim=-1).mean())
+
+
+def _batched_mean_norm(value: torch.Tensor) -> float:
+    return float(torch.linalg.norm(value.detach(), dim=-1).mean().cpu())
+
+
+def _mean_abs(value: torch.Tensor) -> float:
+    return float(value.detach().abs().mean().cpu())
+
+
+def _max_abs(value: torch.Tensor) -> float:
+    return float(value.detach().abs().max().cpu())
+
+
+def _mse(prediction: torch.Tensor, target: torch.Tensor) -> float:
+    return float(torch.nn.functional.mse_loss(prediction.detach(), target.detach()).cpu())
 
 
 def _safe_ratio(numerator: float, denominator: float) -> float | None:

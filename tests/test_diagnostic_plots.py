@@ -6,6 +6,7 @@ try:
     from terrain_adaptation_rls.evaluation.diagnostic_plots import (
         integrate_planar_deltas,
         quantile_range,
+        summarize_conditioning,
         summarize_trajectory_scales,
     )
 except ModuleNotFoundError:
@@ -76,6 +77,30 @@ class DiagnosticPlotTests(unittest.TestCase):
             "prediction_error_is_within_5_percent_of_zero_delta_baseline",
             summary["flags"],
         )
+
+    def test_summarizes_conditioning_scale_mismatch(self):
+        xs = torch.zeros(1, 2, 8)
+        dt = torch.full((1, 2), 0.1)
+        target = torch.ones(1, 2, 6)
+        example_xs = torch.zeros(1, 2, 8)
+        example_dt = torch.full((1, 2), 0.1)
+        example_ys = 0.01 * torch.ones(1, 2, 6)
+        prediction = torch.zeros_like(target)
+
+        summary = summarize_conditioning(
+            model=torch.nn.Identity(),
+            family="neural_ode",
+            batch=(xs, dt, target, example_xs, example_dt, example_ys),
+            prediction=prediction,
+            scene="debug",
+        )
+
+        self.assertLess(summary["example_to_query_target_norm_ratio"], 0.1)
+        self.assertIn(
+            "conditioning_examples_are_less_than_10_percent_of_query_scale",
+            summary["flags"],
+        )
+        self.assertEqual(summary["query"]["mse_to_zero_delta_mse_ratio"], 1.0)
 
 
 if __name__ == "__main__":
