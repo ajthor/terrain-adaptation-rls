@@ -290,6 +290,7 @@ def summarize_method_rows(rows: Iterable[Mapping[str, object]]) -> list[dict[str
     rows = list(rows)
     by_method: dict[str, list[Mapping[str, object]]] = {}
     labels: dict[str, str] = {}
+    ranks_by_method = rank_methods_by_window(rows)
     for row in rows:
         method = str(row["method"])
         by_method.setdefault(method, []).append(row)
@@ -306,11 +307,14 @@ def summarize_method_rows(rows: Iterable[Mapping[str, object]]) -> list[dict[str
         accumulated_errors = [float(row["final_accumulated_error"]) for row in method_rows]
         mses = [float(row["mse"]) for row in method_rows]
         method_mean = mean(mean_errors)
+        ranks = ranks_by_method.get(method, [])
         summaries.append(
             {
                 "method": method,
                 "label": labels[method],
                 "n_windows": len(method_rows),
+                "win_count": sum(1 for rank in ranks if rank == 1),
+                "mean_rank": mean(ranks) if ranks else 0.0,
                 "mean_error_mean": method_mean,
                 "mean_error_median": median(mean_errors),
                 "mean_error_std": _std(mean_errors),
@@ -325,6 +329,29 @@ def summarize_method_rows(rows: Iterable[Mapping[str, object]]) -> list[dict[str
         )
 
     return sorted(summaries, key=lambda item: float(item["mean_error_mean"]))
+
+
+def rank_methods_by_window(
+    rows: Iterable[Mapping[str, object]],
+) -> dict[str, list[int]]:
+    """Rank methods independently within each scene/window."""
+
+    grouped: dict[tuple[str, str, int, int], list[Mapping[str, object]]] = {}
+    for row in rows:
+        key = (
+            str(row.get("split", "")),
+            str(row.get("scene", "")),
+            int(row.get("start_index", 0)),
+            int(row.get("window_index", 0)),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    ranks: dict[str, list[int]] = {}
+    for window_rows in grouped.values():
+        sorted_rows = sorted(window_rows, key=lambda row: float(row["mean_error"]))
+        for rank, row in enumerate(sorted_rows, start=1):
+            ranks.setdefault(str(row["method"]), []).append(rank)
+    return ranks
 
 
 def write_sweep_artifacts(

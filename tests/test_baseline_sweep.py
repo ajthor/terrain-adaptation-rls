@@ -2,6 +2,7 @@ import unittest
 
 from terrain_adaptation_rls.configuration import ExperimentConfig
 from terrain_adaptation_rls.evaluation.baseline_sweep import (
+    rank_methods_by_window,
     resolve_scene_splits,
     summarize_method_rows,
     window_starts,
@@ -44,12 +45,12 @@ class BaselineSweepTests(unittest.TestCase):
 
     def test_summarize_method_rows_sorts_by_mean_error(self):
         rows = [
-            {"method": "zero_delta", "label": "zero", "mean_error": 10.0, "final_accumulated_error": 20.0, "mse": 5.0},
-            {"method": "method_a", "label": "A", "mean_error": 2.0, "final_accumulated_error": 4.0, "mse": 1.0},
-            {"method": "method_b", "label": "B", "mean_error": 3.0, "final_accumulated_error": 6.0, "mse": 2.0},
-            {"method": "zero_delta", "label": "zero", "mean_error": 8.0, "final_accumulated_error": 16.0, "mse": 4.0},
-            {"method": "method_a", "label": "A", "mean_error": 4.0, "final_accumulated_error": 8.0, "mse": 2.0},
-            {"method": "method_b", "label": "B", "mean_error": 1.0, "final_accumulated_error": 2.0, "mse": 1.0},
+            _row("zero_delta", "zero", 10.0, window_index=0),
+            _row("method_a", "A", 2.0, window_index=0),
+            _row("method_b", "B", 3.0, window_index=0),
+            _row("zero_delta", "zero", 8.0, window_index=1),
+            _row("method_a", "A", 4.0, window_index=1),
+            _row("method_b", "B", 1.0, window_index=1),
         ]
 
         summary = summarize_method_rows(rows)
@@ -59,6 +60,35 @@ class BaselineSweepTests(unittest.TestCase):
         self.assertEqual(summary[-1]["method"], "zero_delta")
         self.assertAlmostEqual(summary[0]["mean_error_mean"], 2.0)
         self.assertAlmostEqual(summary[0]["relative_improvement_vs_zero_delta"], 1 - 2 / 9)
+        self.assertEqual(summary[0]["win_count"], 1)
+        self.assertAlmostEqual(summary[0]["mean_rank"], 1.5)
+
+    def test_rank_methods_by_window(self):
+        rows = [
+            _row("method_a", "A", 1.0, window_index=0),
+            _row("method_b", "B", 2.0, window_index=0),
+            _row("method_a", "A", 3.0, window_index=1),
+            _row("method_b", "B", 1.5, window_index=1),
+        ]
+
+        ranks = rank_methods_by_window(rows)
+
+        self.assertEqual(ranks["method_a"], [1, 2])
+        self.assertEqual(ranks["method_b"], [2, 1])
+
+
+def _row(method, label, mean_error, *, window_index):
+    return {
+        "split": "test",
+        "scene": "scene0",
+        "window_index": window_index,
+        "start_index": 512 * window_index,
+        "method": method,
+        "label": label,
+        "mean_error": mean_error,
+        "final_accumulated_error": 2.0 * mean_error,
+        "mse": 0.5 * mean_error,
+    }
 
 
 if __name__ == "__main__":
