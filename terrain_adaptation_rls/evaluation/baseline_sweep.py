@@ -536,6 +536,7 @@ def write_sweep_artifacts(
     write_rows_csv(artifact_dir / "pairwise_vs_fe_rls.csv", pairwise_summary)
     write_method_bar_plot(artifact_dir / "mean_error_by_method.png", method_summary)
     write_per_window_plot(artifact_dir / "mean_error_by_window.png", rows)
+    write_metric_summary_grid(artifact_dir / "metric_summary_grid.png", method_summary)
 
 
 def write_rows_csv(path: Path, rows: list[Mapping[str, object]]) -> None:
@@ -617,6 +618,58 @@ def write_per_window_plot(path: Path, rows: list[Mapping[str, object]]) -> None:
     ax.set_ylabel("mean prediction error")
     ax.set_title("Per-window held-out error")
     ax.legend(ncol=2)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_metric_summary_grid(
+    path: Path,
+    method_summary: list[Mapping[str, object]],
+) -> None:
+    """Write a compact plot across representative metric families."""
+
+    if not method_summary:
+        return
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    metric_specs = [
+        ("mean_error_mean", "one-step mean error"),
+        ("integrated_position_final_error_mean", "final integrated position error"),
+        ("logged_k10_endpoint_error_mean", "logged k=10 endpoint error"),
+        ("recursive_k10_accumulated_error_mean", "recursive k=10 accumulated error"),
+    ]
+    available_specs = [
+        (field, title)
+        for field, title in metric_specs
+        if field in method_summary[0]
+    ]
+    if not available_specs:
+        return
+
+    labels = [str(row["label"]) for row in method_summary]
+    fig, axes = plt.subplots(
+        len(available_specs),
+        1,
+        figsize=(max(8, 0.72 * len(labels)), 2.6 * len(available_specs)),
+        sharex=False,
+    )
+    if len(available_specs) == 1:
+        axes = [axes]
+
+    for ax, (field, title) in zip(axes, available_specs):
+        ordered_rows = sorted(method_summary, key=lambda row: float(row[field]))
+        ordered_labels = [str(row["label"]) for row in ordered_rows]
+        values = [float(row[field]) for row in ordered_rows]
+        ax.bar(range(len(ordered_labels)), values)
+        ax.set_ylabel(title)
+        ax.set_xticks(range(len(ordered_labels)))
+        ax.set_xticklabels(ordered_labels, rotation=35, ha="right")
+
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
