@@ -66,6 +66,15 @@ class VanDerPolToyTests(unittest.TestCase):
             self.assertTrue((artifact_dir / "summary.json").exists())
             self.assertTrue((artifact_dir / "metric_summary_grid.png").exists())
             self.assertTrue((artifact_dir / "training_losses.png").exists())
+            self.assertTrue((artifact_dir / "basis_streamplots_fe_ode_rls.png").exists())
+            self.assertTrue((artifact_dir / "basis_streamplots_fe_mlp_rls.png").exists())
+            self.assertTrue((artifact_dir / "basis_streamplots_neuralfly_rls.png").exists())
+            self.assertTrue((artifact_dir / "interpolation_mu_0.75_component_errors.png").exists())
+            self.assertTrue(
+                (artifact_dir / "interpolation_mu_0.75_recursive_horizon_errors.png").exists()
+            )
+            self.assertTrue((artifact_dir / "interpolation_mu_0.75_rollout_snapshots.png").exists())
+            self.assertTrue((artifact_dir / "interpolation_mu_0.75_streamplots.png").exists())
 
 
 if __name__ == "__main__":

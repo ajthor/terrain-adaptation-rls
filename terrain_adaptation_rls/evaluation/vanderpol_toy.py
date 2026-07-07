@@ -163,6 +163,14 @@ def run_vanderpol_toy_evaluation(
         for index, (name, model) in enumerate(methods.items())
     }
 
+    for name, model in methods.items():
+        write_basis_streamplots(
+            artifact_path / f"basis_streamplots_{name}.png",
+            model=model,
+            title=labels[name],
+            dt=dt,
+        )
+
     rows: list[dict[str, object]] = []
     scenarios: dict[str, object] = {}
     for mu in test_mus:
@@ -175,6 +183,7 @@ def run_vanderpol_toy_evaluation(
         )
         scenario_predictions: dict[str, torch.Tensor] = {}
         scenario_errors: dict[str, torch.Tensor] = {}
+        scenario_coefficients: dict[str, torch.Tensor] = {}
         scenario_rows: list[dict[str, object]] = []
 
         for name, model in methods.items():
@@ -197,6 +206,7 @@ def run_vanderpol_toy_evaluation(
             scenario_rows.append(row)
             scenario_predictions[name] = result["predictions"]
             scenario_errors[name] = result["errors"]
+            scenario_coefficients[name] = result["coefficient_history"]
 
         zero_predictions = torch.zeros_like(trajectory["deltas"])
         zero_errors = torch.linalg.norm(zero_predictions - trajectory["deltas"], dim=-1)
@@ -231,12 +241,42 @@ def run_vanderpol_toy_evaluation(
             errors=scenario_errors,
             labels=labels,
         )
+        write_online_component_error_plot(
+            artifact_path / f"{scenario}_component_errors.png",
+            scenario=scenario,
+            predictions=scenario_predictions,
+            target=trajectory["deltas"],
+            labels=labels,
+        )
+        write_recursive_horizon_plot(
+            artifact_path / f"{scenario}_recursive_horizon_errors.png",
+            scenario=scenario,
+            rows=scenario_rows,
+        )
         write_phase_plot(
             artifact_path / f"{scenario}_phase_trajectory.png",
             scenario=scenario,
             trajectory=trajectory,
             predictions=scenario_predictions,
             labels=labels,
+        )
+        write_rollout_snapshot_plot(
+            artifact_path / f"{scenario}_rollout_snapshots.png",
+            scenario=scenario,
+            trajectory=trajectory,
+            methods=methods,
+            coefficient_histories=scenario_coefficients,
+            labels=labels,
+        )
+        write_streamplot_comparison(
+            artifact_path / f"{scenario}_streamplots.png",
+            scenario=scenario,
+            mu=mu,
+            trajectory=trajectory,
+            methods=methods,
+            coefficient_histories=scenario_coefficients,
+            labels=labels,
+            dt=dt,
         )
         scenarios[scenario] = {
             "mu": mu,
@@ -621,6 +661,103 @@ def write_online_error_plot(
     plt.close(fig)
 
 
+def write_online_component_error_plot(
+    path: Path,
+    *,
+    scenario: str,
+    predictions: dict[str, torch.Tensor],
+    target: torch.Tensor,
+    labels: dict[str, str],
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    target_cpu = target.detach().cpu()
+    fig, axes = plt.subplots(3, 1, figsize=(9, 7), sharex=True)
+    plot_specs = [
+        (0, "|delta x error|"),
+        (1, "|delta xdot error|"),
+    ]
+    positive_values: list[float] = []
+    for name, prediction in predictions.items():
+        prediction_cpu = prediction.detach().cpu()
+        component_error = (prediction_cpu - target_cpu).abs()
+        norm_error = torch.linalg.norm(prediction_cpu - target_cpu, dim=-1)
+        for axis_index, (component_index, _) in enumerate(plot_specs):
+            values = component_error[:, component_index]
+            positive_values.extend(float(value) for value in values if value > 0.0)
+            axes[axis_index].plot(
+                values.numpy(),
+                label=labels.get(name, name),
+                linewidth=1.0,
+            )
+        positive_values.extend(float(value) for value in norm_error if value > 0.0)
+        axes[2].plot(norm_error.numpy(), label=labels.get(name, name), linewidth=1.0)
+
+    for axis, (_, label) in zip(axes[:2], plot_specs):
+        axis.set_ylabel(label)
+    axes[2].set_ylabel("norm error")
+    axes[2].set_xlabel("online update step")
+    if positive_values and max(positive_values) / max(min(positive_values), 1e-12) > 1_000.0:
+        for axis in axes:
+            axis.set_yscale("log")
+    axes[0].set_title(scenario)
+    axes[0].legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_recursive_horizon_plot(
+    path: Path,
+    *,
+    scenario: str,
+    rows: list[dict[str, object]],
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    horizons = sorted(
+        {
+            int(str(key).removeprefix("recursive_k").removesuffix("_final_step_error_mean"))
+            for row in rows
+            for key in row
+            if str(key).startswith("recursive_k")
+            and str(key).endswith("_final_step_error_mean")
+        }
+    )
+    if not horizons:
+        path.write_text("")
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True)
+    positive_values: list[float] = []
+    for row in rows:
+        label = str(row["label"])
+        final_values = [float(row[f"recursive_k{k}_final_step_error_mean"]) for k in horizons]
+        accum_values = [float(row[f"recursive_k{k}_accumulated_error_mean"]) for k in horizons]
+        positive_values.extend(value for value in final_values + accum_values if value > 0.0)
+        axes[0].plot(horizons, final_values, marker="o", label=label, linewidth=1.0)
+        axes[1].plot(horizons, accum_values, marker="o", label=label, linewidth=1.0)
+    if positive_values and max(positive_values) / max(min(positive_values), 1e-12) > 1_000.0:
+        for axis in axes:
+            axis.set_yscale("log")
+    axes[0].set_title("final-step error")
+    axes[1].set_title("accumulated error")
+    for axis in axes:
+        axis.set_xlabel("recursive rollout horizon")
+        axis.set_xticks(horizons)
+    axes[0].set_ylabel("error")
+    axes[0].legend(fontsize=8)
+    fig.suptitle(scenario)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def write_phase_plot(
     path: Path,
     *,
@@ -658,6 +795,250 @@ def write_phase_plot(
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def write_rollout_snapshot_plot(
+    path: Path,
+    *,
+    scenario: str,
+    trajectory: dict[str, torch.Tensor],
+    methods: dict[str, torch.nn.Module],
+    coefficient_histories: dict[str, torch.Tensor],
+    labels: dict[str, str],
+    rollout_horizon: int = 100,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    true_states = trajectory["states"].detach().cpu()
+    max_start = max(0, true_states.shape[0] - 2)
+    starts = _unique_indices([0, max_start // 3, 2 * max_start // 3])
+    xlim, ylim = _phase_limits(true_states)
+    fig, axes = plt.subplots(1, len(starts), figsize=(5 * len(starts), 4), squeeze=False)
+    for col_index, start in enumerate(starts):
+        ax = axes[0][col_index]
+        horizon = min(rollout_horizon, true_states.shape[0] - start - 1)
+        true_segment = true_states[start : start + horizon + 1]
+        ax.plot(true_segment[:, 0], true_segment[:, 1], label="true", linewidth=2)
+        for name, model in methods.items():
+            rollout = rollout_fixed_coefficients(
+                model,
+                trajectory=trajectory,
+                coefficient_history=coefficient_histories[name],
+                start=start,
+                horizon=horizon,
+            )
+            ax.plot(
+                rollout[:, 0],
+                rollout[:, 1],
+                label=labels.get(name, name),
+                linewidth=1.0,
+                alpha=0.8,
+            )
+        zero_rollout = rollout_fixed_coefficients(
+            None,
+            trajectory=trajectory,
+            coefficient_history=None,
+            start=start,
+            horizon=horizon,
+        )
+        ax.plot(
+            zero_rollout[:, 0],
+            zero_rollout[:, 1],
+            label=labels.get("zero_delta", "zero delta"),
+            linewidth=1.0,
+            alpha=0.8,
+            linestyle="--",
+        )
+        ax.scatter(true_segment[0, 0], true_segment[0, 1], s=16, color="black", zorder=5)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_xlabel("x")
+        ax.set_ylabel("xdot")
+        ax.set_title(f"start {start}, horizon {horizon}")
+    axes[0][0].legend(fontsize=8)
+    fig.suptitle(f"{scenario}: fixed-coefficient recursive rollouts")
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_streamplot_comparison(
+    path: Path,
+    *,
+    scenario: str,
+    mu: float,
+    trajectory: dict[str, torch.Tensor],
+    methods: dict[str, torch.nn.Module],
+    coefficient_histories: dict[str, torch.Tensor],
+    labels: dict[str, str],
+    dt: float,
+    grid_size: int = 31,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    true_states = trajectory["states"].detach().cpu()
+    xlim, ylim = _phase_limits(true_states)
+    device = trajectory["states"].device
+    dtype = trajectory["states"].dtype
+    grid_x, grid_y, points = _phase_grid(
+        xlim=xlim,
+        ylim=ylim,
+        grid_size=grid_size,
+        device=device,
+        dtype=dtype,
+    )
+
+    plot_items: list[tuple[str, torch.Tensor]] = [
+        ("true", true_vanderpol_vector_field(points, mu=mu)),
+    ]
+    for name, model in methods.items():
+        coefficients = coefficient_histories[name][-1].to(device=device, dtype=dtype).unsqueeze(0)
+        plot_items.append(
+            (
+                labels.get(name, name),
+                predict_vector_field(model, points=points, coefficients=coefficients, dt=dt),
+            )
+        )
+
+    fig, axes = plt.subplots(1, len(plot_items), figsize=(4 * len(plot_items), 4), squeeze=False)
+    for col_index, (title, vectors) in enumerate(plot_items):
+        ax = axes[0][col_index]
+        stream_u, stream_v = _stream_components(vectors, grid_size=grid_size)
+        ax.streamplot(grid_x.numpy(), grid_y.numpy(), stream_u.numpy(), stream_v.numpy(), density=1.0)
+        ax.plot(true_states[:, 0], true_states[:, 1], color="black", linewidth=1.0, alpha=0.55)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_xlabel("x")
+        ax.set_ylabel("xdot")
+        ax.set_title(title)
+    fig.suptitle(f"{scenario}: final adapted vector fields")
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def write_basis_streamplots(
+    path: Path,
+    *,
+    model: torch.nn.Module,
+    title: str,
+    dt: float,
+    grid_size: int = 25,
+    max_basis: int = 8,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    device = next(model.parameters()).device
+    dtype = next(model.parameters()).dtype
+    xlim = (-3.0, 3.0)
+    ylim = (-6.0, 6.0)
+    grid_x, grid_y, points = _phase_grid(
+        xlim=xlim,
+        ylim=ylim,
+        grid_size=grid_size,
+        device=device,
+        dtype=dtype,
+    )
+    with torch.no_grad():
+        dt_values = torch.full((1, points.shape[0]), dt, dtype=dtype, device=device)
+        features = model(RuntimeInput(points.reshape(1, -1, 2), dt_values)).squeeze(0)
+        vectors = features / dt
+
+    n_plots = min(int(model.n_basis), max_basis)
+    n_cols = min(4, n_plots)
+    n_rows = (n_plots + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3.5 * n_rows), squeeze=False)
+    for basis_index in range(n_rows * n_cols):
+        ax = axes[basis_index // n_cols][basis_index % n_cols]
+        if basis_index >= n_plots:
+            ax.axis("off")
+            continue
+        stream_u, stream_v = _stream_components(vectors[:, :, basis_index], grid_size=grid_size)
+        ax.streamplot(grid_x.numpy(), grid_y.numpy(), stream_u.numpy(), stream_v.numpy(), density=0.9)
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+        ax.set_xlabel("x")
+        ax.set_ylabel("xdot")
+        ax.set_title(f"basis {basis_index}")
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+@torch.no_grad()
+def rollout_fixed_coefficients(
+    predictor: torch.nn.Module | None,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    coefficient_history: torch.Tensor | None,
+    start: int,
+    horizon: int,
+) -> torch.Tensor:
+    states = trajectory["states"]
+    dt = trajectory["dt"]
+    current = states[start].clone()
+    rollout = [current.detach().cpu()]
+    coefficients = None
+    if predictor is not None:
+        assert coefficient_history is not None
+        coefficients = _coefficients_for_rollout_start(
+            coefficient_history=coefficient_history,
+            start=start,
+            device=states.device,
+            dtype=states.dtype,
+        )
+    for offset in range(horizon):
+        index = start + offset
+        if predictor is None:
+            delta = torch.zeros_like(current)
+        else:
+            assert coefficients is not None
+            features = predictor(
+                RuntimeInput(
+                    current.reshape(1, 1, -1),
+                    dt[index : index + 1].reshape(1, 1),
+                )
+            )
+            delta = linear_predict(features, coefficients).squeeze(0).squeeze(0)
+        current = current + delta
+        rollout.append(current.detach().cpu())
+        if not torch.isfinite(current).all():
+            break
+    return torch.stack(rollout)
+
+
+@torch.no_grad()
+def predict_vector_field(
+    model: torch.nn.Module,
+    *,
+    points: torch.Tensor,
+    coefficients: torch.Tensor,
+    dt: float,
+) -> torch.Tensor:
+    dt_values = torch.full((1, points.shape[0]), dt, dtype=points.dtype, device=points.device)
+    features = model(RuntimeInput(points.reshape(1, -1, 2), dt_values))
+    deltas = linear_predict(features, coefficients).squeeze(0)
+    return deltas / dt
+
+
+def true_vanderpol_vector_field(points: torch.Tensor, *, mu: float) -> torch.Tensor:
+    return torch.stack(
+        (
+            points[:, 1],
+            mu * (1.0 - points[:, 0].square()) * points[:, 1] - points[:, 0],
+        ),
+        dim=-1,
+    )
 
 
 def write_training_loss_plot(
@@ -753,6 +1134,68 @@ def write_metric_bar_grid(path: Path, rows: list[dict[str, object]]) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def _unique_indices(indices: list[int]) -> list[int]:
+    unique: list[int] = []
+    for index in indices:
+        if index not in unique:
+            unique.append(index)
+    return unique
+
+
+def _phase_limits(states: torch.Tensor) -> tuple[tuple[float, float], tuple[float, float]]:
+    finite = states[torch.isfinite(states).all(dim=-1)]
+    if finite.numel() == 0:
+        return (-3.0, 3.0), (-6.0, 6.0)
+    mins = finite.min(dim=0).values
+    maxs = finite.max(dim=0).values
+    spans = torch.clamp(maxs - mins, min=1e-6)
+    pads = torch.maximum(0.15 * spans, torch.tensor([0.5, 0.75], dtype=states.dtype))
+    xlim = (float(mins[0] - pads[0]), float(maxs[0] + pads[0]))
+    ylim = (float(mins[1] - pads[1]), float(maxs[1] + pads[1]))
+    return xlim, ylim
+
+
+def _phase_grid(
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+    grid_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    x_values = torch.linspace(xlim[0], xlim[1], grid_size, dtype=dtype, device=device)
+    y_values = torch.linspace(ylim[0], ylim[1], grid_size, dtype=dtype, device=device)
+    grid_y, grid_x = torch.meshgrid(y_values, x_values, indexing="ij")
+    points = torch.stack((grid_x.reshape(-1), grid_y.reshape(-1)), dim=-1)
+    return x_values.detach().cpu(), y_values.detach().cpu(), points
+
+
+def _stream_components(vectors: torch.Tensor, *, grid_size: int) -> tuple[torch.Tensor, torch.Tensor]:
+    cpu_vectors = torch.nan_to_num(
+        vectors.detach().cpu(),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    u = cpu_vectors[:, 0].reshape(grid_size, grid_size)
+    v = cpu_vectors[:, 1].reshape(grid_size, grid_size)
+    return u, v
+
+
+def _coefficients_for_rollout_start(
+    *,
+    coefficient_history: torch.Tensor,
+    start: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if start <= 0:
+        coefficients = torch.zeros_like(coefficient_history[0])
+    else:
+        coefficients = coefficient_history[min(start - 1, coefficient_history.shape[0] - 1)]
+    return coefficients.to(device=device, dtype=dtype).unsqueeze(0)
 
 
 def _true_vanderpol_delta(x: torch.Tensor, *, mu: float, dt: torch.Tensor) -> torch.Tensor:
