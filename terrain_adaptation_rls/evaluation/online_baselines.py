@@ -33,9 +33,13 @@ from terrain_adaptation_rls.training.supervised import scene_supervised_batch
 
 METHOD_LABELS = {
     "fe_rls": "FE-RLS",
+    "fe_kalman": "FE-Kalman",
+    "fe_sgd": "FE-SGD",
+    "fe_window_ls": "FE-window LS",
     "offline_fe": "offline FE",
     "neuralfly_rls": "NeuralFly-style RLS",
     "offline_neuralfly": "offline NeuralFly-style",
+    "static_node": "static NODE",
     "linear_rls": "linear RLS",
     "offline_linear": "offline linear",
     "zero_delta": "zero delta",
@@ -56,6 +60,7 @@ def run_online_baseline_comparison(
     artifact_dir: str | Path,
     scene: str,
     neuralfly_run_dir: str | Path | None = None,
+    node_run_dir: str | Path | None = None,
     device: torch.device | str = "cpu",
     max_points: int = 512,
     start_index: int = 0,
@@ -63,12 +68,20 @@ def run_online_baseline_comparison(
     forgetting_factor: float = 0.95,
     initial_covariance: float = 1_000.0,
     measurement_noise: float = 1e-6,
+    include_fe_variants: bool = True,
+    kalman_process_noise: float = 0.0,
+    fe_sgd_learning_rate: float = 1e-2,
+    fe_sgd_momentum: float = 0.0,
+    fe_sgd_weight_decay: float = 0.0,
+    fe_window_size: int = 100,
+    fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
 ) -> OnlineBaselineArtifacts:
-    """Compare FE-RLS, NeuralFly-style RLS, linear RLS, and offline baselines."""
+    """Compare trained and online update baselines on one held-out scene."""
 
     fe_run_dir = Path(fe_run_dir)
     neuralfly_run_path = None if neuralfly_run_dir is None else Path(neuralfly_run_dir)
+    node_run_path = None if node_run_dir is None else Path(node_run_dir)
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -120,6 +133,45 @@ def run_online_baseline_comparison(
         time=time,
     )
 
+    if include_fe_variants:
+        fe_provider = FunctionEncoderBasisProvider(fe_model)
+        fe_variant_methods = {
+            "fe_kalman": TorchCoefficientMethod(
+                fe_provider,
+                update_rule="kalman",
+                output_dim=6,
+                initial_covariance=initial_covariance,
+                measurement_noise=measurement_noise,
+                process_noise=kalman_process_noise,
+                device=device,
+            ),
+            "fe_sgd": TorchCoefficientMethod(
+                fe_provider,
+                update_rule="sgd",
+                output_dim=6,
+                learning_rate=fe_sgd_learning_rate,
+                momentum=fe_sgd_momentum,
+                weight_decay=fe_sgd_weight_decay,
+                device=device,
+            ),
+            "fe_window_ls": TorchCoefficientMethod(
+                fe_provider,
+                update_rule="window_ls",
+                output_dim=6,
+                window_size=fe_window_size,
+                ridge=fe_window_ridge,
+                device=device,
+            ),
+        }
+        for name, method in fe_variant_methods.items():
+            predictions[name], coefficient_histories[name] = stream_runtime_method(
+                method,
+                xs=xs,
+                dt=dt,
+                target=target,
+                time=time,
+            )
+
     if neuralfly_run_path is not None:
         neuralfly_config = load_config(neuralfly_run_path / "resolved_config.json")
         neuralfly_model = load_neuralfly_style_basis(
@@ -152,6 +204,11 @@ def run_online_baseline_comparison(
             target=target,
             time=time,
         )
+
+    if node_run_path is not None:
+        node_config = load_config(node_run_path / "resolved_config.json")
+        node_model = load_trained_neural_ode(node_config, node_run_path, device=device)
+        predictions["static_node"] = node_model((xs, dt)).detach().cpu()
 
     linear_provider = LinearBasisProvider(
         input_dim=9,
@@ -202,6 +259,13 @@ def run_online_baseline_comparison(
         measurement_noise=measurement_noise,
         start_index=start_index,
         n_example_points=n_examples,
+        include_fe_variants=include_fe_variants,
+        kalman_process_noise=kalman_process_noise,
+        fe_sgd_learning_rate=fe_sgd_learning_rate,
+        fe_sgd_momentum=fe_sgd_momentum,
+        fe_sgd_weight_decay=fe_sgd_weight_decay,
+        fe_window_size=fe_window_size,
+        fe_window_ridge=fe_window_ridge,
         linear_include_bias=linear_include_bias,
     )
     write_online_baseline_artifacts(
@@ -215,6 +279,25 @@ def run_online_baseline_comparison(
         summary=summary,
     )
     return OnlineBaselineArtifacts(artifact_dir=artifact_dir, summary=summary)
+
+
+def load_trained_neural_ode(
+    config: object,
+    train_run_dir: str | Path,
+    *,
+    device: torch.device,
+) -> torch.nn.Module:
+    """Load a trained static Neural ODE from a run directory."""
+
+    from terrain_adaptation_rls.models.neural_ode import create_model
+
+    n_basis = int(config.model.get("n_basis", 8))
+    hidden_size = int(config.model.get("hidden_size", 128))
+    model = create_model(device, n_basis=n_basis, hidden_size=hidden_size)
+    state = torch.load(Path(train_run_dir) / "neural_ode_model.pth", map_location=device)
+    model.load_state_dict(state)
+    model.eval()
+    return model
 
 
 @torch.no_grad()
@@ -264,7 +347,14 @@ def summarize_baseline_predictions(
     measurement_noise: float,
     start_index: int,
     n_example_points: int,
-    linear_include_bias: bool,
+    include_fe_variants: bool = True,
+    kalman_process_noise: float = 0.0,
+    fe_sgd_learning_rate: float = 1e-2,
+    fe_sgd_momentum: float = 0.0,
+    fe_sgd_weight_decay: float = 0.0,
+    fe_window_size: int = 100,
+    fe_window_ridge: float = 1e-6,
+    linear_include_bias: bool = True,
 ) -> dict[str, object]:
     """Compute scalar metrics for all baseline predictions."""
 
@@ -310,6 +400,15 @@ def summarize_baseline_predictions(
             "forgetting_factor": forgetting_factor,
             "initial_covariance": initial_covariance,
             "measurement_noise": measurement_noise,
+        },
+        "fe_variant_parameters": {
+            "include": include_fe_variants,
+            "kalman_process_noise": kalman_process_noise,
+            "sgd_learning_rate": fe_sgd_learning_rate,
+            "sgd_momentum": fe_sgd_momentum,
+            "sgd_weight_decay": fe_sgd_weight_decay,
+            "window_size": fe_window_size,
+            "window_ridge": fe_window_ridge,
         },
         "linear_baseline": {
             "include_bias": linear_include_bias,
@@ -366,6 +465,14 @@ def write_online_baseline_artifacts(
         scene=scene,
         target=target,
         predictions=predictions,
+        include_offline=True,
+    )
+    write_streaming_trajectory_plot(
+        artifact_dir / "streaming_trajectory_online.png",
+        scene=scene,
+        target=target,
+        predictions=predictions,
+        include_offline=False,
     )
     write_coefficient_norm_plot(
         artifact_dir / "coefficient_norms.png",
@@ -554,6 +661,7 @@ def write_streaming_trajectory_plot(
     scene: str,
     target: torch.Tensor,
     predictions: dict[str, torch.Tensor],
+    include_offline: bool,
 ) -> None:
     """Write integrated local trajectory comparison."""
 
@@ -565,7 +673,7 @@ def write_streaming_trajectory_plot(
     target_pose = integrate_planar_deltas(target.squeeze(0))
     fig, ax = plt.subplots(figsize=(7, 7))
     ax.plot(target_pose[:, 0], target_pose[:, 1], label="target", linewidth=1.6, color="black")
-    for name in _selected_prediction_names(predictions, include_offline=True):
+    for name in _selected_prediction_names(predictions, include_offline=include_offline):
         pose = integrate_planar_deltas(predictions[name].squeeze(0))
         ax.plot(
             pose[:, 0],
@@ -577,7 +685,8 @@ def write_streaming_trajectory_plot(
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("integrated local x")
     ax.set_ylabel("integrated local y")
-    ax.set_title(scene)
+    title = scene if include_offline else f"{scene}: online methods"
+    ax.set_title(title)
     ax.legend()
     fig.tight_layout()
     fig.savefig(path, dpi=160)
@@ -659,7 +768,15 @@ def _selected_prediction_names(
     *,
     include_offline: bool = False,
 ) -> list[str]:
-    order = ["fe_rls", "neuralfly_rls", "linear_rls"]
+    order = [
+        "fe_rls",
+        "fe_kalman",
+        "fe_window_ls",
+        "neuralfly_rls",
+        "linear_rls",
+        "fe_sgd",
+        "static_node",
+    ]
     if include_offline:
         order += ["offline_fe", "offline_neuralfly", "offline_linear"]
     return [name for name in order if name in predictions]
@@ -670,6 +787,10 @@ def _plot_kwargs(name: str) -> dict[str, object]:
         return {"linewidth": 1.0, "alpha": 0.45, "linestyle": "--"}
     if name.startswith("offline"):
         return {"linewidth": 1.0, "alpha": 0.7, "linestyle": ":"}
+    if name == "static_node":
+        return {"linewidth": 1.1, "alpha": 0.8, "linestyle": "-."}
+    if name in {"fe_sgd", "fe_window_ls"}:
+        return {"linewidth": 1.0, "alpha": 0.85}
     return {"linewidth": 1.2}
 
 

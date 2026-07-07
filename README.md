@@ -27,6 +27,12 @@ Train the NeuralFly-style learned-basis baseline:
 python3 -m terrain_adaptation_rls.experiments.train_neuralfly --device cuda:0
 ```
 
+Train the static Neural ODE baseline:
+
+```bash
+python3 -m terrain_adaptation_rls.experiments.train_node --device cuda:0
+```
+
 For a quick debug run without editing the config:
 
 ```bash
@@ -41,11 +47,13 @@ Validate the configs without creating artifacts:
 ```bash
 python3 -m terrain_adaptation_rls.experiments.train_fe --dry-run
 python3 -m terrain_adaptation_rls.experiments.train_neuralfly --dry-run
+python3 -m terrain_adaptation_rls.experiments.train_node --dry-run
 ```
 
 The default FE config is `configs/train/warty_fe_scaled.json`. The default
 NeuralFly-style config is `configs/train/warty_neuralfly_scaled.json`. Smaller
-debug configs live beside them in `configs/train/`.
+The default static Neural ODE config is `configs/train/warty_node_scaled.json`.
+Smaller debug configs live beside them in `configs/train/`.
 
 ## Training Artifacts
 
@@ -91,12 +99,14 @@ This writes to `outputs/eval/<timestamp>_<run-name>/`. Useful files include
 ## Baseline Comparisons
 
 Compare FE-RLS, NeuralFly-style RLS, no-training linear RLS, offline coefficient
-solves, and the zero-delta baseline with one command:
+solves, static NODE, FE-Kalman, FE-SGD, FE-windowed least squares, and the
+zero-delta baseline with one command:
 
 ```bash
 python3 -m terrain_adaptation_rls.experiments.eval_online_baselines \
   --fe-run-dir outputs/train/<timestamp>_<fe-run-name> \
   --neuralfly-run-dir outputs/train/<timestamp>_<neuralfly-run-name> \
+  --node-run-dir outputs/train/<timestamp>_<node-run-name> \
   --scene scene1 \
   --device cuda:0 \
   --run-name online_baselines_scene1
@@ -104,8 +114,8 @@ python3 -m terrain_adaptation_rls.experiments.eval_online_baselines \
 
 This writes `streaming_error.png`, `streaming_components.png`,
 `streaming_delta_scale.png`, `streaming_trajectory.png`,
-`coefficient_norms.png`, `summary.json`, `trajectory_summary.json`, and
-`streaming_predictions.csv`.
+`streaming_trajectory_online.png`, `coefficient_norms.png`, `summary.json`,
+`trajectory_summary.json`, and `streaming_predictions.csv`.
 
 ## Tests
 
