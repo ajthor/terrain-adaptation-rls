@@ -147,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         fe_window_size=args.fe_window_size,
         fe_window_ridge=args.fe_window_ridge,
         linear_include_bias=not args.linear_no_bias,
+        progress=True,
     )
     print(result.artifact_dir)
     return 0

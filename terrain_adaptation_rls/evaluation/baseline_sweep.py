@@ -55,6 +55,7 @@ def run_baseline_sweep(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    progress: bool = False,
 ) -> SweepArtifacts:
     """Run online baseline comparisons for multiple held-out scene windows."""
 
@@ -77,7 +78,13 @@ def run_baseline_sweep(
     )
     rows: list[dict[str, object]] = []
 
-    for window in windows:
+    for window_number, window in enumerate(windows, start=1):
+        if progress:
+            print(
+                f"[{window_number}/{len(windows)}] "
+                f"evaluating {window.split}:{window.scene}@{window.start_index}",
+                flush=True,
+            )
         window_dir = artifact_dir / f"{window.split}_{window.scene}_start{window.start_index}"
         result = run_online_baseline_comparison(
             fe_run_dir=fe_run_dir,
@@ -101,6 +108,17 @@ def run_baseline_sweep(
             fe_window_ridge=fe_window_ridge,
             linear_include_bias=linear_include_bias,
         )
+        if progress:
+            methods = result.summary["methods"]
+            best_method, best_metrics = min(
+                methods.items(),
+                key=lambda item: float(item[1]["mean_error"]),
+            )
+            print(
+                f"[{window_number}/{len(windows)}] "
+                f"best {best_method} mean_error={best_metrics['mean_error']:.6f}",
+                flush=True,
+            )
         rows.extend(summary_rows(result.summary, window))
 
     method_summary = summarize_method_rows(rows)
@@ -131,6 +149,7 @@ def run_baseline_sweep(
             "fe_window_size": fe_window_size,
             "fe_window_ridge": fe_window_ridge,
             "linear_include_bias": linear_include_bias,
+            "progress": progress,
         },
     )
     return SweepArtifacts(
