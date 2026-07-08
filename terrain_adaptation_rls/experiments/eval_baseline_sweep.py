@@ -44,6 +44,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-points", type=int, default=512)
     parser.add_argument("--window-stride", type=int, default=None)
     parser.add_argument("--max-windows-per-scene", type=int, default=1)
+    parser.add_argument(
+        "--window-policy",
+        default="sequential",
+        choices=("sequential", "quantile", "random_middle", "mixed"),
+        help="How to choose window start indices within each scene.",
+    )
+    parser.add_argument("--window-seed", type=int, default=0)
+    parser.add_argument(
+        "--window-margin",
+        type=int,
+        default=None,
+        help="Optional margin, in samples, excluded by random_middle windows.",
+    )
     parser.add_argument("--n-example-points", type=int, default=None)
     parser.add_argument("--forgetting-factor", type=float, default=0.95)
     parser.add_argument("--initial-covariance", type=float, default=1000.0)
@@ -108,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         max_points=args.max_points,
         window_stride=args.window_stride,
         max_windows_per_scene=args.max_windows_per_scene,
+        window_policy=args.window_policy,
+        window_seed=args.window_seed,
+        window_margin=args.window_margin,
     )
 
     if args.dry_run:
@@ -132,6 +148,9 @@ def main(argv: list[str] | None = None) -> int:
             "max_points": args.max_points,
             "window_stride": args.window_stride,
             "max_windows_per_scene": args.max_windows_per_scene,
+            "window_policy": args.window_policy,
+            "window_seed": args.window_seed,
+            "window_margin": args.window_margin,
             "n_example_points": args.n_example_points,
             "forgetting_factor": args.forgetting_factor,
             "initial_covariance": args.initial_covariance,
@@ -167,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
         max_points=args.max_points,
         window_stride=args.window_stride,
         max_windows_per_scene=args.max_windows_per_scene,
+        window_policy=args.window_policy,
+        window_seed=args.window_seed,
+        window_margin=args.window_margin,
         n_example_points=args.n_example_points,
         forgetting_factor=args.forgetting_factor,
         initial_covariance=args.initial_covariance,

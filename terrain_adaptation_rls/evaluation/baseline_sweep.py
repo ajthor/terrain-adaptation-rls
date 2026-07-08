@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
@@ -44,6 +45,9 @@ def run_baseline_sweep(
     max_points: int = 512,
     window_stride: int | None = None,
     max_windows_per_scene: int = 1,
+    window_policy: str = "sequential",
+    window_seed: int = 0,
+    window_margin: int | None = None,
     n_example_points: int | None = None,
     forgetting_factor: float = 0.95,
     initial_covariance: float = 1_000.0,
@@ -81,6 +85,9 @@ def run_baseline_sweep(
         max_points=max_points,
         window_stride=window_stride,
         max_windows_per_scene=max_windows_per_scene,
+        window_policy=window_policy,
+        window_seed=window_seed,
+        window_margin=window_margin,
     )
     rows: list[dict[str, object]] = []
 
@@ -150,6 +157,9 @@ def run_baseline_sweep(
             "max_points": max_points,
             "window_stride": window_stride,
             "max_windows_per_scene": max_windows_per_scene,
+            "window_policy": window_policy,
+            "window_seed": window_seed,
+            "window_margin": window_margin,
             "n_example_points": n_example_points,
             "forgetting_factor": forgetting_factor,
             "initial_covariance": initial_covariance,
@@ -185,6 +195,9 @@ def resolve_sweep_windows(
     max_points: int,
     window_stride: int | None,
     max_windows_per_scene: int,
+    window_policy: str = "sequential",
+    window_seed: int = 0,
+    window_margin: int | None = None,
 ) -> list[SweepWindow]:
     """Resolve scene/window slices from config split metadata."""
 
@@ -213,6 +226,9 @@ def resolve_sweep_windows(
                 max_points=max_points,
                 stride=stride,
                 max_windows=max_windows_per_scene,
+                policy=window_policy,
+                seed=window_seed + len(windows),
+                margin=window_margin,
             )
             for window_index, start_index in enumerate(starts):
                 windows.append(
@@ -277,6 +293,9 @@ def window_starts(
     max_points: int,
     stride: int,
     max_windows: int,
+    policy: str = "sequential",
+    seed: int = 0,
+    margin: int | None = None,
 ) -> list[int]:
     """Return deterministic window starts that cover a scene without overlap assumptions."""
 
@@ -285,6 +304,94 @@ def window_starts(
     if n_points <= max_points:
         return [0]
 
+    max_start = max(0, n_points - max_points)
+    if policy == "sequential":
+        return _legacy_window_starts(
+            n_points=n_points,
+            max_points=max_points,
+            stride=stride,
+            max_windows=max_windows,
+        )
+    if policy == "quantile":
+        return _quantile_starts(max_start=max_start, max_windows=max_windows)
+    if policy == "random_middle":
+        return _random_middle_starts(
+            max_start=max_start,
+            max_windows=max_windows,
+            seed=seed,
+            margin=margin,
+        )
+    if policy == "mixed":
+        anchors = _quantile_starts(max_start=max_start, max_windows=min(3, max_windows))
+        remaining = max_windows - len(anchors)
+        if remaining > 0:
+            anchors.extend(
+                _random_middle_starts(
+                    max_start=max_start,
+                    max_windows=remaining,
+                    seed=seed,
+                    margin=margin,
+                )
+            )
+        return _dedupe_limited(anchors, max_windows)
+
+    raise ValueError(
+        f"unknown window policy '{policy}'; expected sequential, quantile, "
+        "random_middle, or mixed"
+    )
+
+
+def _dedupe_limited(starts: Iterable[int], max_windows: int) -> list[int]:
+    result: list[int] = []
+    for start in starts:
+        start = int(start)
+        if start not in result:
+            result.append(start)
+        if len(result) >= max_windows:
+            break
+    if not result:
+        result = [0]
+    return result
+
+
+def _quantile_starts(*, max_start: int, max_windows: int) -> list[int]:
+    if max_windows <= 1:
+        return [max_start // 2]
+    starts = [
+        round(max_start * index / (max_windows - 1))
+        for index in range(max_windows)
+    ]
+    return _dedupe_limited(starts, max_windows)
+
+
+def _random_middle_starts(
+    *,
+    max_start: int,
+    max_windows: int,
+    seed: int,
+    margin: int | None,
+) -> list[int]:
+    if max_windows <= 0:
+        return []
+    effective_margin = max(0, max_start // 10 if margin is None else int(margin))
+    low = min(effective_margin, max_start)
+    high = max(0, max_start - effective_margin)
+    if low > high:
+        low, high = 0, max_start
+    if high - low + 1 <= max_windows:
+        return list(range(low, high + 1))
+    rng = random.Random(seed)
+    starts = sorted(rng.sample(range(low, high + 1), max_windows))
+    return _dedupe_limited(starts, max_windows)
+
+
+def _legacy_window_starts(
+    *,
+    n_points: int,
+    max_points: int,
+    stride: int,
+    max_windows: int,
+) -> list[int]:
     starts = list(range(0, n_points, stride))
     starts = [start for start in starts if start < n_points]
     starts = starts[:max_windows]

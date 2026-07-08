@@ -45,6 +45,55 @@ class BaselineSweepTests(unittest.TestCase):
 
         self.assertEqual(starts, [0, 256, 512])
 
+    def test_window_starts_supports_quantile_policy(self):
+        starts = window_starts(
+            n_points=1512,
+            max_points=512,
+            stride=256,
+            max_windows=3,
+            policy="quantile",
+        )
+
+        self.assertEqual(starts, [0, 500, 1000])
+
+    def test_window_starts_supports_random_middle_policy(self):
+        starts_a = window_starts(
+            n_points=1512,
+            max_points=512,
+            stride=256,
+            max_windows=3,
+            policy="random_middle",
+            seed=11,
+            margin=200,
+        )
+        starts_b = window_starts(
+            n_points=1512,
+            max_points=512,
+            stride=256,
+            max_windows=3,
+            policy="random_middle",
+            seed=11,
+            margin=200,
+        )
+
+        self.assertEqual(starts_a, starts_b)
+        self.assertEqual(len(starts_a), 3)
+        self.assertTrue(all(200 <= start <= 800 for start in starts_a))
+
+    def test_window_starts_supports_mixed_policy(self):
+        starts = window_starts(
+            n_points=1512,
+            max_points=512,
+            stride=256,
+            max_windows=5,
+            policy="mixed",
+            seed=7,
+            margin=200,
+        )
+
+        self.assertEqual(starts[:3], [0, 500, 1000])
+        self.assertEqual(len(starts), 5)
+
     def test_summarize_method_rows_sorts_by_mean_error(self):
         rows = [
             _row("zero_delta", "zero", 10.0, window_index=0),
