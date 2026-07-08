@@ -98,6 +98,7 @@ def summarize_logged_k_step_metrics(
     *,
     target: torch.Tensor,
     prediction: torch.Tensor,
+    dt: torch.Tensor | None = None,
     horizons: Iterable[int] = DEFAULT_LOGGED_K_STEP_HORIZONS,
 ) -> dict[str, float]:
     """Summarize cumulative logged-input lookahead errors for several horizons."""
@@ -110,11 +111,20 @@ def summarize_logged_k_step_metrics(
             f"{tuple(target_delta.shape)} != {tuple(prediction_delta.shape)}"
         )
 
+    dt_single = _single_time(dt) if dt is not None else None
+    if dt_single is not None and dt_single.shape[0] != target_delta.shape[0]:
+        raise ValueError(
+            "dt and trajectory length must match: "
+            f"{dt_single.shape[0]} != {target_delta.shape[0]}"
+        )
+
     metrics: dict[str, float] = {}
     n_steps = target_delta.shape[0]
     for horizon in _valid_horizons(horizons, n_steps):
         endpoint_errors: list[float] = []
         accumulated_errors: list[float] = []
+        trajectory_rmses: list[float] = []
+        integral_square_errors: list[float] = []
         final_position_errors: list[float] = []
         final_yaw_errors: list[float] = []
 
@@ -127,8 +137,19 @@ def summarize_logged_k_step_metrics(
                 prediction_cumulative - target_cumulative,
                 dim=-1,
             )
+            weights = (
+                dt_single[start : start + horizon]
+                if dt_single is not None
+                else torch.ones_like(cumulative_error)
+            )
+            square_error = cumulative_error.square()
+            square_integral = torch.sum(square_error * weights)
             endpoint_errors.append(float(cumulative_error[-1]))
             accumulated_errors.append(float(cumulative_error.sum()))
+            trajectory_rmses.append(
+                float(torch.sqrt(square_integral / torch.clamp(weights.sum(), min=1e-12)))
+            )
+            integral_square_errors.append(float(square_integral))
 
             target_pose = integrate_planar_deltas(target_window)
             prediction_pose = integrate_planar_deltas(prediction_window)
@@ -142,6 +163,25 @@ def summarize_logged_k_step_metrics(
         metrics[f"{prefix}_endpoint_error_median"] = _median(endpoint_errors)
         metrics[f"{prefix}_endpoint_error_p95"] = _quantile_list(endpoint_errors, 0.95)
         metrics[f"{prefix}_accumulated_error_mean"] = _mean(accumulated_errors)
+        metrics[f"{prefix}_accumulated_error_median"] = _median(accumulated_errors)
+        metrics[f"{prefix}_accumulated_error_p95"] = _quantile_list(
+            accumulated_errors,
+            0.95,
+        )
+        metrics[f"{prefix}_trajectory_rmse_mean"] = _mean(trajectory_rmses)
+        metrics[f"{prefix}_trajectory_rmse_median"] = _median(trajectory_rmses)
+        metrics[f"{prefix}_trajectory_rmse_p95"] = _quantile_list(
+            trajectory_rmses,
+            0.95,
+        )
+        metrics[f"{prefix}_integral_square_error_mean"] = _mean(integral_square_errors)
+        metrics[f"{prefix}_integral_square_error_median"] = _median(
+            integral_square_errors
+        )
+        metrics[f"{prefix}_integral_square_error_p95"] = _quantile_list(
+            integral_square_errors,
+            0.95,
+        )
         metrics[f"{prefix}_final_position_error_mean"] = _mean(final_position_errors)
         metrics[f"{prefix}_final_yaw_error_mean"] = _mean(final_yaw_errors)
     return metrics

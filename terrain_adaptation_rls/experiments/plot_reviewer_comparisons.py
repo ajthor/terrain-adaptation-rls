@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-name", default="reviewer_comparison_plots")
     parser.add_argument("--output-root", default="outputs")
     parser.add_argument(
+        "--include-zero-delta",
+        action="store_true",
+        help="Include the zero-delta sanity baseline in representative/k-step plots.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate input artifacts without writing plots.",
@@ -56,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         {
             "command": "plot_reviewer_comparisons",
             "run_dirs": run_dirs,
+            "include_zero_delta": args.include_zero_delta,
         },
     )
     from terrain_adaptation_rls.evaluation.reviewer_plots import (
@@ -65,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     write_reviewer_comparison_plots(
         run_dirs=run_dirs,
         artifact_dir=artifact_dir,
+        include_zero_delta=args.include_zero_delta,
     )
     print(artifact_dir)
     return 0

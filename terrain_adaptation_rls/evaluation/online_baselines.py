@@ -361,6 +361,7 @@ def run_online_baseline_comparison(
 
     summary = summarize_baseline_predictions(
         target=target_cpu,
+        dt=dt_cpu,
         predictions=predictions,
         coefficient_histories=coefficient_histories,
         recursive_k_step_metrics=recursive_k_step_metrics,
@@ -528,6 +529,10 @@ def summarize_recursive_k_step_metrics(
         horizon_accumulated: dict[int, list[float]] = {
             horizon: [] for horizon in valid_horizons
         }
+        horizon_rmses: dict[int, list[float]] = {horizon: [] for horizon in valid_horizons}
+        horizon_integral_square: dict[int, list[float]] = {
+            horizon: [] for horizon in valid_horizons
+        }
 
         for start_tensor in starts:
             start = int(start_tensor.item())
@@ -536,6 +541,7 @@ def summarize_recursive_k_step_metrics(
                 begin_rollout(start)
             state = xs_single[start, :6].clone()
             step_errors: list[float] = []
+            step_dts: list[float] = []
             for offset in range(max_horizon):
                 index = start + offset
                 control = xs_single[index, 6:]
@@ -548,16 +554,26 @@ def summarize_recursive_k_step_metrics(
                 true_next = target_delta[index] + xs_single[index, :6]
                 predicted_next = torch.cat((delta[:3], state[3:6] + delta[3:6]))
                 step_errors.append(float(torch.linalg.norm(predicted_next - true_next)))
+                step_dts.append(float(dt_single[index].detach().cpu()))
                 state = _roll_legacy_body_state(state, delta)
 
                 horizon = offset + 1
                 if horizon in horizon_errors:
+                    square_integral = sum(
+                        error * error * step_dt
+                        for error, step_dt in zip(step_errors, step_dts)
+                    )
+                    duration = max(sum(step_dts), 1e-12)
                     horizon_errors[horizon].append(step_errors[-1])
                     horizon_accumulated[horizon].append(sum(step_errors))
+                    horizon_rmses[horizon].append((square_integral / duration) ** 0.5)
+                    horizon_integral_square[horizon].append(square_integral)
 
         for horizon in valid_horizons:
             errors = horizon_errors[horizon]
             accumulated = horizon_accumulated[horizon]
+            rmses = horizon_rmses[horizon]
+            integral_square = horizon_integral_square[horizon]
             prefix = f"recursive_k{horizon}"
             method_summary[f"{prefix}_n_rollouts"] = float(len(errors))
             method_summary[f"{prefix}_final_step_error_mean"] = _mean(errors)
@@ -569,6 +585,19 @@ def summarize_recursive_k_step_metrics(
                 accumulated,
                 0.95,
             )
+            method_summary[f"{prefix}_trajectory_rmse_mean"] = _mean(rmses)
+            method_summary[f"{prefix}_trajectory_rmse_median"] = _median(rmses)
+            method_summary[f"{prefix}_trajectory_rmse_p95"] = _quantile_list(rmses, 0.95)
+            method_summary[f"{prefix}_integral_square_error_mean"] = _mean(
+                integral_square
+            )
+            method_summary[f"{prefix}_integral_square_error_median"] = _median(
+                integral_square
+            )
+            method_summary[f"{prefix}_integral_square_error_p95"] = _quantile_list(
+                integral_square,
+                0.95,
+            )
         summaries[name] = method_summary
     return summaries
 
@@ -578,6 +607,7 @@ def summarize_baseline_predictions(
     target: torch.Tensor,
     predictions: dict[str, torch.Tensor],
     coefficient_histories: dict[str, torch.Tensor],
+    dt: torch.Tensor | None = None,
     recursive_k_step_metrics: dict[str, dict[str, float]] | None = None,
     scene: str,
     forgetting_factor: float,
@@ -608,6 +638,7 @@ def summarize_baseline_predictions(
     zero_metrics = summarize_prediction_metrics(
         target=target_delta,
         prediction=zero_prediction_delta,
+        dt=dt,
     )
 
     method_summaries: dict[str, object] = {}
@@ -617,12 +648,14 @@ def summarize_baseline_predictions(
         metrics = summarize_prediction_metrics(
             target=target_delta,
             prediction=prediction_delta,
+            dt=dt,
             zero_metrics=zero_metrics,
         )
         metrics.update(
             summarize_logged_k_step_metrics(
                 target=target_delta,
                 prediction=prediction_delta,
+                dt=dt,
                 horizons=DEFAULT_LOGGED_K_STEP_HORIZONS,
             )
         )

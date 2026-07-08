@@ -72,6 +72,16 @@ class OnlineBaselineEvaluationTests(unittest.TestCase):
             2 * 6**0.5,
             places=6,
         )
+        self.assertAlmostEqual(
+            summary["zero"]["recursive_k2_trajectory_rmse_mean"],
+            6**0.5,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            summary["zero"]["recursive_k2_integral_square_error_mean"],
+            12.0,
+            places=5,
+        )
 
 
 if __name__ == "__main__":

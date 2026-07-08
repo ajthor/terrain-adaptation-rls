@@ -15,7 +15,6 @@ REPRESENTATIVE_METHODS = (
     "maml_online",
     "static_node",
     "linear_rls",
-    "zero_delta",
 )
 FE_VARIANT_METHODS = (
     "offline_fe",
@@ -30,7 +29,6 @@ K_STEP_METHODS = (
     "neuralfly_rls",
     "maml_online",
     "static_node",
-    "zero_delta",
 )
 METHOD_COLORS = {
     "offline_fe": "#4b5563",
@@ -61,6 +59,7 @@ def write_reviewer_comparison_plots(
     *,
     run_dirs: Mapping[str, str | Path],
     artifact_dir: str | Path,
+    include_zero_delta: bool = False,
 ) -> dict[str, object]:
     """Write grouped comparison plots from one or more baseline sweep runs."""
 
@@ -74,6 +73,8 @@ def write_reviewer_comparison_plots(
         scene: load_csv_rows(Path(run_dir) / "window_metrics.csv")
         for scene, run_dir in run_dirs.items()
     }
+    representative_methods = _maybe_with_zero(REPRESENTATIVE_METHODS, include_zero_delta)
+    k_step_methods = _maybe_with_zero(K_STEP_METHODS, include_zero_delta)
 
     written = [
         write_all_methods_ranked_plot(
@@ -83,7 +84,7 @@ def write_reviewer_comparison_plots(
         write_grouped_method_bar_plot(
             artifact_path / "representative_mean_error.png",
             method_summaries,
-            methods=REPRESENTATIVE_METHODS,
+            methods=representative_methods,
             title="Representative baseline one-step error",
             ylabel="mean one-step error",
             log_scale=True,
@@ -99,30 +100,84 @@ def write_reviewer_comparison_plots(
         write_per_window_plot(
             artifact_path / "representative_per_window_error.png",
             window_metrics,
-            methods=REPRESENTATIVE_METHODS,
+            methods=representative_methods,
         ),
         write_k_step_plot(
             artifact_path / "logged_k_step_endpoint_error.png",
             method_summaries,
-            methods=K_STEP_METHODS,
+            methods=k_step_methods,
             metric_prefix="logged",
             value_name="endpoint_error",
             title="Logged-input k-step endpoint error",
             ylabel="endpoint error",
         ),
         write_k_step_plot(
+            artifact_path / "logged_k_step_accumulated_error.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="logged",
+            value_name="accumulated_error",
+            title="Logged-input k-step accumulated error",
+            ylabel="accumulated error",
+        ),
+        write_k_step_plot(
+            artifact_path / "logged_k_step_trajectory_rmse.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="logged",
+            value_name="trajectory_rmse",
+            title="Logged-input k-step trajectory RMSE",
+            ylabel="trajectory RMSE",
+        ),
+        write_k_step_plot(
+            artifact_path / "logged_k_step_integral_square_error.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="logged",
+            value_name="integral_square_error",
+            title="Logged-input k-step integral square error",
+            ylabel="integral square error",
+        ),
+        write_k_step_plot(
             artifact_path / "recursive_k_step_final_error.png",
             method_summaries,
-            methods=K_STEP_METHODS,
+            methods=k_step_methods,
             metric_prefix="recursive",
             value_name="final_step_error",
             title="Recursive open-loop k-step final error",
             ylabel="final step error",
         ),
+        write_k_step_plot(
+            artifact_path / "recursive_k_step_accumulated_error.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="recursive",
+            value_name="accumulated_error",
+            title="Recursive open-loop k-step accumulated error",
+            ylabel="accumulated error",
+        ),
+        write_k_step_plot(
+            artifact_path / "recursive_k_step_trajectory_rmse.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="recursive",
+            value_name="trajectory_rmse",
+            title="Recursive open-loop k-step trajectory RMSE",
+            ylabel="trajectory RMSE",
+        ),
+        write_k_step_plot(
+            artifact_path / "recursive_k_step_integral_square_error.png",
+            method_summaries,
+            methods=k_step_methods,
+            metric_prefix="recursive",
+            value_name="integral_square_error",
+            title="Recursive open-loop k-step integral square error",
+            ylabel="integral square error",
+        ),
         write_grouped_method_bar_plot(
             artifact_path / "integrated_position_error.png",
             method_summaries,
-            methods=REPRESENTATIVE_METHODS,
+            methods=representative_methods,
             title="Integrated trajectory position error",
             ylabel="integrated position mean error",
             metric="integrated_position_mean_error_mean",
@@ -134,9 +189,10 @@ def write_reviewer_comparison_plots(
     payload = {
         "run_dirs": {scene: str(path) for scene, path in run_dirs.items()},
         "plots": [path.name for path in written],
-        "representative_methods": list(REPRESENTATIVE_METHODS),
+        "include_zero_delta": include_zero_delta,
+        "representative_methods": list(representative_methods),
         "fe_variant_methods": list(FE_VARIANT_METHODS),
-        "k_step_methods": list(K_STEP_METHODS),
+        "k_step_methods": list(k_step_methods),
     }
     (artifact_path / "plot_manifest.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -390,9 +446,33 @@ def flatten_plot_summary(
                         row,
                         "logged_k10_endpoint_error_mean",
                     ),
+                    "logged_k10_accumulated_error_mean": _float(
+                        row,
+                        "logged_k10_accumulated_error_mean",
+                    ),
+                    "logged_k10_trajectory_rmse_mean": _float(
+                        row,
+                        "logged_k10_trajectory_rmse_mean",
+                    ),
+                    "logged_k10_integral_square_error_mean": _float(
+                        row,
+                        "logged_k10_integral_square_error_mean",
+                    ),
                     "recursive_k10_final_step_error_mean": _float(
                         row,
                         "recursive_k10_final_step_error_mean",
+                    ),
+                    "recursive_k10_accumulated_error_mean": _float(
+                        row,
+                        "recursive_k10_accumulated_error_mean",
+                    ),
+                    "recursive_k10_trajectory_rmse_mean": _float(
+                        row,
+                        "recursive_k10_trajectory_rmse_mean",
+                    ),
+                    "recursive_k10_integral_square_error_mean": _float(
+                        row,
+                        "recursive_k10_integral_square_error_mean",
                     ),
                 }
             )
@@ -414,6 +494,13 @@ def write_rows_csv(path: Path, rows: list[Mapping[str, object]]) -> None:
 
 def _find(rows: list[dict[str, str]], method: str) -> dict[str, str] | None:
     return next((row for row in rows if row.get("method") == method), None)
+
+
+def _maybe_with_zero(methods: Iterable[str], include_zero_delta: bool) -> tuple[str, ...]:
+    result = tuple(methods)
+    if include_zero_delta and "zero_delta" not in result:
+        return result + ("zero_delta",)
+    return result
 
 
 def _label(row: Mapping[str, str]) -> str:

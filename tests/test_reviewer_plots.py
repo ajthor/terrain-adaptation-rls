@@ -34,10 +34,24 @@ class ReviewerPlotTests(unittest.TestCase):
 
             plot_dir = root / "plots"
             self.assertIn("representative_mean_error.png", payload["plots"])
+            self.assertFalse(payload["include_zero_delta"])
+            self.assertNotIn("zero_delta", payload["representative_methods"])
             self.assertTrue((plot_dir / "all_methods_ranked_mean_error.png").is_file())
             self.assertTrue((plot_dir / "fe_variant_mean_error.png").is_file())
             self.assertTrue((plot_dir / "logged_k_step_endpoint_error.png").is_file())
+            self.assertTrue((plot_dir / "logged_k_step_accumulated_error.png").is_file())
+            self.assertTrue((plot_dir / "logged_k_step_trajectory_rmse.png").is_file())
+            self.assertTrue(
+                (plot_dir / "logged_k_step_integral_square_error.png").is_file()
+            )
             self.assertTrue((plot_dir / "recursive_k_step_final_error.png").is_file())
+            self.assertTrue(
+                (plot_dir / "recursive_k_step_accumulated_error.png").is_file()
+            )
+            self.assertTrue((plot_dir / "recursive_k_step_trajectory_rmse.png").is_file())
+            self.assertTrue(
+                (plot_dir / "recursive_k_step_integral_square_error.png").is_file()
+            )
             self.assertTrue((plot_dir / "plot_summary.csv").is_file())
 
 
@@ -87,7 +101,13 @@ def _method_row(method: str, label: str, mean_error: float) -> dict[str, object]
     }
     for horizon in (1, 5, 10, 20, 50):
         row[f"logged_k{horizon}_endpoint_error_mean"] = mean_error * horizon
+        row[f"logged_k{horizon}_accumulated_error_mean"] = mean_error * horizon * 2
+        row[f"logged_k{horizon}_trajectory_rmse_mean"] = mean_error * horizon**0.5
+        row[f"logged_k{horizon}_integral_square_error_mean"] = mean_error**2 * horizon
         row[f"recursive_k{horizon}_final_step_error_mean"] = mean_error * horizon * 1.5
+        row[f"recursive_k{horizon}_accumulated_error_mean"] = mean_error * horizon * 3
+        row[f"recursive_k{horizon}_trajectory_rmse_mean"] = mean_error * horizon**0.5
+        row[f"recursive_k{horizon}_integral_square_error_mean"] = mean_error**2 * horizon
     return row
 
 

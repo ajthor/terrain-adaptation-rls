@@ -64,6 +64,8 @@ class EvaluationMetricTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["logged_k1_endpoint_error_mean"], 1.0)
         self.assertAlmostEqual(metrics["logged_k2_endpoint_error_mean"], 2.0)
         self.assertAlmostEqual(metrics["logged_k2_accumulated_error_mean"], 3.0)
+        self.assertAlmostEqual(metrics["logged_k2_trajectory_rmse_mean"], (2.5) ** 0.5)
+        self.assertAlmostEqual(metrics["logged_k2_integral_square_error_mean"], 5.0)
 
 
 if __name__ == "__main__":
