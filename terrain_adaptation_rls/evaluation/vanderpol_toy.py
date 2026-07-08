@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 import math
@@ -11,9 +12,9 @@ from typing import Iterable
 
 import torch
 
-from terrain_adaptation_rls.estimators.linear import RLSState, linear_predict, rls_update
+from terrain_adaptation_rls.estimators.linear import linear_predict
 from terrain_adaptation_rls.estimators.linear import solve_ridge_coefficients
-from terrain_adaptation_rls.methods.runtime import RuntimeInput
+from terrain_adaptation_rls.methods.runtime import Observation, RuntimeInput, TorchCoefficientMethod
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,10 @@ class FEIncrementBasis(torch.nn.Module):
             [ToyMLP(3, 2, hidden_size) for _ in range(n_basis)]
         )
 
+    @property
+    def n_coeff(self) -> int:
+        return self.n_basis
+
     def forward(self, inputs: RuntimeInput) -> torch.Tensor:
         z = _concat_state_dt(inputs)
         values = [basis(z) for basis in self.basis_functions]
@@ -70,6 +75,10 @@ class FEODEBasis(torch.nn.Module):
         self.vector_fields = torch.nn.ModuleList(
             [ToyMLP(2, 2, hidden_size) for _ in range(n_basis)]
         )
+
+    @property
+    def n_coeff(self) -> int:
+        return self.n_basis
 
     def forward(self, inputs: RuntimeInput) -> torch.Tensor:
         xs = _as_batched_state(inputs.xs)
@@ -92,10 +101,27 @@ class NeuralFlyToyBasis(torch.nn.Module):
             torch.nn.Linear(hidden_size, 2 * n_basis),
         )
 
+    @property
+    def n_coeff(self) -> int:
+        return self.n_basis
+
     def forward(self, inputs: RuntimeInput) -> torch.Tensor:
         z = _concat_state_dt(inputs)
         features = self.network(z)
         return features.reshape(*z.shape[:-1], 2, self.n_basis)
+
+
+class DirectNODEToyModel(torch.nn.Module):
+    """Static neural ODE dynamics model mapping ``(x, dt)`` to ``delta x``."""
+
+    def __init__(self, *, hidden_size: int) -> None:
+        super().__init__()
+        self.vector_field = ToyMLP(2, 2, hidden_size)
+
+    def forward(self, inputs: RuntimeInput) -> torch.Tensor:
+        xs = _as_batched_state(inputs.xs)
+        dt = _as_batched_dt(inputs.dt, xs)
+        return _rk4_delta(self.vector_field, xs, dt)
 
 
 def run_vanderpol_toy_evaluation(
@@ -130,6 +156,14 @@ def run_vanderpol_toy_evaluation(
     forgetting_factor: float = 0.98,
     initial_covariance: float = 100.0,
     measurement_noise: float = 1e-5,
+    kalman_process_noise: float = 0.0,
+    coefficient_sgd_learning_rate: float = 1.0,
+    coefficient_sgd_momentum: float = 0.0,
+    coefficient_sgd_weight_decay: float = 0.0,
+    coefficient_window_size: int = 64,
+    coefficient_window_ridge: float = 1e-6,
+    maml_inner_learning_rate: float = 1e-2,
+    maml_inner_steps: int = 1,
     write_diagnostics: bool = True,
 ) -> ToyEvaluationResult:
     """Train toy bases and evaluate zero-coefficient RLS on held-out VDP tasks."""
@@ -155,16 +189,33 @@ def run_vanderpol_toy_evaluation(
         seed=seed + 100_000,
         device=device,
     )
-    methods: dict[str, torch.nn.Module] = {
-        "fe_ode_rls": FEODEBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
-        "fe_mlp_rls": FEIncrementBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
-        "neuralfly_rls": NeuralFlyToyBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
+    basis_models: dict[str, torch.nn.Module] = {
+        "fe_ode": FEODEBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
+        "fe_mlp": FEIncrementBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
+        "neuralfly": NeuralFlyToyBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
+    }
+    direct_models: dict[str, torch.nn.Module] = {
+        "node_static": DirectNODEToyModel(hidden_size=hidden_size).to(device),
+        "maml": DirectNODEToyModel(hidden_size=hidden_size).to(device),
     }
     labels = {
-        "fe_ode_rls": "FE-ODE basis RLS",
-        "fe_mlp_rls": "FE-MLP basis RLS",
-        "neuralfly_rls": "NeuralFly-style RLS",
-        "zero_delta": "zero delta",
+        "fe_ode": "FE-ODE basis",
+        "fe_ode_static": "FE-ODE prior-static",
+        "fe_ode_prior_rls": "FE-ODE prior-RLS",
+        "fe_ode_rls": "FE-ODE RLS",
+        "fe_ode_kalman": "FE-ODE Kalman",
+        "fe_ode_sgd": "FE-ODE SGD",
+        "fe_ode_window_ls": "FE-ODE window LS",
+        "fe_mlp": "FE-MLP basis",
+        "fe_mlp_rls": "FE-MLP RLS",
+        "neuralfly": "NeuralFly basis",
+        "neuralfly_static": "NeuralFly prior-static",
+        "neuralfly_prior_rls": "NeuralFly prior-RLS",
+        "neuralfly_rls": "NeuralFly RLS",
+        "node_static": "NODE static",
+        "maml_static": "MAML static",
+        "maml_online": "MAML online",
+        "zero_delta": "zero state-change",
     }
 
     train_histories = {
@@ -190,15 +241,62 @@ def run_vanderpol_toy_evaluation(
             seed=seed + index,
             device=device,
         )
-        for index, (name, model) in enumerate(methods.items())
+        for index, (name, model) in enumerate(basis_models.items())
+    }
+    train_histories["node_static"] = train_direct_toy_model(
+        direct_models["node_static"],
+        train_data=train_data,
+        steps=train_steps,
+        batch_size=batch_size,
+        n_query_points=n_query_points,
+        learning_rate=learning_rate,
+        optimizer_name=optimizer_name,
+        weight_decay=weight_decay,
+        gradient_clip=gradient_clip,
+        lr_schedule=lr_schedule,
+        warmup_steps=warmup_steps,
+        final_lr_fraction=final_lr_fraction,
+        validation_data=validation_data,
+        validation_interval=validation_interval,
+        validation_batches=validation_batches,
+        restore_best=restore_best,
+        seed=seed + 10_000,
+        device=device,
+    )
+    train_histories["maml_static"] = train_maml_toy_model(
+        direct_models["maml"],
+        train_data=train_data,
+        steps=train_steps,
+        batch_size=batch_size,
+        n_example_points=n_example_points,
+        n_query_points=n_query_points,
+        inner_learning_rate=maml_inner_learning_rate,
+        inner_steps=maml_inner_steps,
+        learning_rate=learning_rate,
+        optimizer_name=optimizer_name,
+        weight_decay=weight_decay,
+        gradient_clip=gradient_clip,
+        lr_schedule=lr_schedule,
+        warmup_steps=warmup_steps,
+        final_lr_fraction=final_lr_fraction,
+        validation_data=validation_data,
+        validation_interval=validation_interval,
+        validation_batches=validation_batches,
+        restore_best=restore_best,
+        seed=seed + 20_000,
+        device=device,
+    )
+    prior_coefficients = {
+        name: solve_global_train_coefficients(model, train_data=train_data, ridge=ridge)
+        for name, model in basis_models.items()
     }
 
     if write_diagnostics:
-        for name, model in methods.items():
+        for name, model in basis_models.items():
             write_basis_streamplots(
-                artifact_path / f"basis_streamplots_{name}.png",
+                artifact_path / f"basis_streamplots_{name}_rls.png",
                 model=model,
-                title=labels[name],
+                title=labels[f"{name}_rls"],
                 dt=dt,
             )
 
@@ -215,29 +313,109 @@ def run_vanderpol_toy_evaluation(
         scenario_predictions: dict[str, torch.Tensor] = {}
         scenario_errors: dict[str, torch.Tensor] = {}
         scenario_coefficients: dict[str, torch.Tensor] = {}
+        scenario_initial_coefficients: dict[str, torch.Tensor] = {}
         scenario_rows: list[dict[str, object]] = []
 
-        for name, model in methods.items():
-            result = evaluate_zero_start_rls(
+        coefficient_specs = [
+            ("fe_ode_static", "fe_ode", "static", prior_coefficients["fe_ode"]),
+            ("fe_ode_prior_rls", "fe_ode", "rls", prior_coefficients["fe_ode"]),
+            ("fe_ode_rls", "fe_ode", "rls", None),
+            ("fe_ode_kalman", "fe_ode", "kalman", None),
+            ("fe_ode_sgd", "fe_ode", "sgd", None),
+            ("fe_ode_window_ls", "fe_ode", "window_ls", None),
+            ("fe_mlp_rls", "fe_mlp", "rls", None),
+            ("neuralfly_static", "neuralfly", "static", prior_coefficients["neuralfly"]),
+            (
+                "neuralfly_prior_rls",
+                "neuralfly",
+                "rls",
+                prior_coefficients["neuralfly"],
+            ),
+            ("neuralfly_rls", "neuralfly", "rls", None),
+        ]
+        for name, model_name, update_rule, initial_coefficients in coefficient_specs:
+            model = basis_models[model_name]
+            result = evaluate_coefficient_method(
                 model,
                 trajectory=trajectory,
+                update_rule=update_rule,
+                initial_coefficients=initial_coefficients,
                 forgetting_factor=forgetting_factor,
                 initial_covariance=initial_covariance,
                 measurement_noise=measurement_noise,
+                kalman_process_noise=kalman_process_noise,
+                coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+                coefficient_sgd_momentum=coefficient_sgd_momentum,
+                coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+                coefficient_window_size=coefficient_window_size,
+                coefficient_window_ridge=coefficient_window_ridge,
                 recursive_horizons=(1, 5, 10, 25),
             )
-            row = {
-                "scenario": scenario,
-                "mu": mu,
-                "method": name,
-                "label": labels[name],
-                **result["metrics"],
-            }
-            rows.append(row)
-            scenario_rows.append(row)
-            scenario_predictions[name] = result["predictions"]
-            scenario_errors[name] = result["errors"]
+            add_method_result(
+                rows=rows,
+                scenario_rows=scenario_rows,
+                scenario_predictions=scenario_predictions,
+                scenario_errors=scenario_errors,
+                scenario=scenario,
+                mu=mu,
+                name=name,
+                label=labels[name],
+                result=result,
+            )
             scenario_coefficients[name] = result["coefficient_history"]
+            scenario_initial_coefficients[name] = result["initial_coefficients"]
+
+        node_result = evaluate_direct_model(
+            direct_models["node_static"],
+            trajectory=trajectory,
+            recursive_horizons=(1, 5, 10, 25),
+        )
+        add_method_result(
+            rows=rows,
+            scenario_rows=scenario_rows,
+            scenario_predictions=scenario_predictions,
+            scenario_errors=scenario_errors,
+            scenario=scenario,
+            mu=mu,
+            name="node_static",
+            label=labels["node_static"],
+            result=node_result,
+        )
+        maml_static_result = evaluate_direct_model(
+            direct_models["maml"],
+            trajectory=trajectory,
+            recursive_horizons=(1, 5, 10, 25),
+        )
+        add_method_result(
+            rows=rows,
+            scenario_rows=scenario_rows,
+            scenario_predictions=scenario_predictions,
+            scenario_errors=scenario_errors,
+            scenario=scenario,
+            mu=mu,
+            name="maml_static",
+            label=labels["maml_static"],
+            result=maml_static_result,
+        )
+        maml_online_result = evaluate_maml_online(
+            direct_models["maml"],
+            trajectory=trajectory,
+            inner_learning_rate=maml_inner_learning_rate,
+            inner_steps=maml_inner_steps,
+            recursive_horizons=(1, 5, 10, 25),
+            device=device,
+        )
+        add_method_result(
+            rows=rows,
+            scenario_rows=scenario_rows,
+            scenario_predictions=scenario_predictions,
+            scenario_errors=scenario_errors,
+            scenario=scenario,
+            mu=mu,
+            name="maml_online",
+            label=labels["maml_online"],
+            result=maml_online_result,
+        )
 
         zero_predictions = torch.zeros_like(trajectory["deltas"])
         zero_errors = torch.linalg.norm(zero_predictions - trajectory["deltas"], dim=-1)
@@ -296,8 +474,12 @@ def run_vanderpol_toy_evaluation(
                 artifact_path / f"{scenario}_rollout_snapshots.png",
                 scenario=scenario,
                 trajectory=trajectory,
-                methods=methods,
+                methods={
+                    method_name: basis_models[model_name]
+                    for method_name, model_name, _, _ in coefficient_specs
+                },
                 coefficient_histories=scenario_coefficients,
+                initial_coefficients=scenario_initial_coefficients,
                 labels=labels,
             )
             write_streamplot_comparison(
@@ -305,7 +487,10 @@ def run_vanderpol_toy_evaluation(
                 scenario=scenario,
                 mu=mu,
                 trajectory=trajectory,
-                methods=methods,
+                methods={
+                    method_name: basis_models[model_name]
+                    for method_name, model_name, _, _ in coefficient_specs
+                },
                 coefficient_histories=scenario_coefficients,
                 labels=labels,
                 dt=dt,
@@ -351,6 +536,14 @@ def run_vanderpol_toy_evaluation(
         "forgetting_factor": forgetting_factor,
         "initial_covariance": initial_covariance,
         "measurement_noise": measurement_noise,
+        "kalman_process_noise": kalman_process_noise,
+        "coefficient_sgd_learning_rate": coefficient_sgd_learning_rate,
+        "coefficient_sgd_momentum": coefficient_sgd_momentum,
+        "coefficient_sgd_weight_decay": coefficient_sgd_weight_decay,
+        "coefficient_window_size": coefficient_window_size,
+        "coefficient_window_ridge": coefficient_window_ridge,
+        "maml_inner_learning_rate": maml_inner_learning_rate,
+        "maml_inner_steps": maml_inner_steps,
         "write_diagnostics": write_diagnostics,
         "train_histories": train_histories,
         "scenarios": scenarios,
@@ -485,6 +678,240 @@ def predict_with_solved_coefficients(
     return linear_predict(query_features, coefficients)
 
 
+@torch.no_grad()
+def solve_global_train_coefficients(
+    model: torch.nn.Module,
+    *,
+    train_data: dict[float, VanDerPolTaskData],
+    ridge: float,
+) -> torch.Tensor:
+    features: list[torch.Tensor] = []
+    targets: list[torch.Tensor] = []
+    for task in train_data.values():
+        task_features = model(RuntimeInput(task.xs.unsqueeze(0), task.dt.unsqueeze(0)))
+        features.append(task_features.squeeze(0))
+        targets.append(task.deltas)
+    feature_tensor = torch.cat(features, dim=0).unsqueeze(0)
+    target_tensor = torch.cat(targets, dim=0).unsqueeze(0)
+    return solve_ridge_coefficients(feature_tensor, target_tensor, ridge=ridge)
+
+
+def train_direct_toy_model(
+    model: torch.nn.Module,
+    *,
+    train_data: dict[float, VanDerPolTaskData],
+    steps: int,
+    batch_size: int,
+    n_query_points: int,
+    learning_rate: float,
+    optimizer_name: str,
+    weight_decay: float,
+    gradient_clip: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+    validation_data: dict[float, VanDerPolTaskData],
+    validation_interval: int,
+    validation_batches: int,
+    restore_best: bool,
+    seed: int,
+    device: torch.device,
+) -> dict[str, object]:
+    optimizer = build_optimizer(
+        model,
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
+    generator = torch.Generator(device=device).manual_seed(seed)
+    validation_generator = torch.Generator(device=device).manual_seed(seed + 50_000)
+    losses: list[float] = []
+    learning_rates: list[float] = []
+    validation_steps: list[int] = []
+    validation_losses: list[float] = []
+    best_validation_loss = float("inf")
+    best_step: int | None = None
+    best_state: dict[str, torch.Tensor] | None = None
+
+    for step in range(1, steps + 1):
+        lr_scale = learning_rate_scale(
+            step=step,
+            total_steps=steps,
+            schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+        )
+        current_lr = learning_rate * lr_scale
+        set_optimizer_lr(optimizer, current_lr)
+        batch = sample_task_batch(
+            train_data,
+            batch_size=batch_size,
+            n_example_points=0,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        optimizer.zero_grad(set_to_none=True)
+        prediction = model(RuntimeInput(batch["query_x"], batch["query_dt"]))
+        loss = torch.nn.functional.mse_loss(prediction, batch["query_y"])
+        loss.backward()
+        if gradient_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+        optimizer.step()
+        losses.append(float(loss.detach().cpu()))
+        learning_rates.append(current_lr)
+
+        if should_validate(step, steps=steps, validation_interval=validation_interval):
+            validation_loss = evaluate_direct_toy_loss(
+                model,
+                validation_data=validation_data,
+                batches=validation_batches,
+                batch_size=batch_size,
+                n_query_points=n_query_points,
+                generator=validation_generator,
+                device=device,
+            )
+            validation_steps.append(step)
+            validation_losses.append(validation_loss)
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                best_state = clone_state_dict(model)
+
+    if restore_best and best_state is not None:
+        model.load_state_dict(best_state)
+    return _training_history(
+        losses=losses,
+        learning_rates=learning_rates,
+        validation_steps=validation_steps,
+        validation_losses=validation_losses,
+        best_validation_loss=best_validation_loss,
+        best_step=best_step,
+        restore_best=restore_best,
+        best_state=best_state,
+        optimizer_name=optimizer_name,
+        weight_decay=weight_decay,
+        gradient_clip=gradient_clip,
+        lr_schedule=lr_schedule,
+        warmup_steps=warmup_steps,
+        final_lr_fraction=final_lr_fraction,
+    )
+
+
+def train_maml_toy_model(
+    model: torch.nn.Module,
+    *,
+    train_data: dict[float, VanDerPolTaskData],
+    steps: int,
+    batch_size: int,
+    n_example_points: int,
+    n_query_points: int,
+    inner_learning_rate: float,
+    inner_steps: int,
+    learning_rate: float,
+    optimizer_name: str,
+    weight_decay: float,
+    gradient_clip: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+    validation_data: dict[float, VanDerPolTaskData],
+    validation_interval: int,
+    validation_batches: int,
+    restore_best: bool,
+    seed: int,
+    device: torch.device,
+) -> dict[str, object]:
+    optimizer = build_optimizer(
+        model,
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
+    generator = torch.Generator(device=device).manual_seed(seed)
+    validation_generator = torch.Generator(device=device).manual_seed(seed + 50_000)
+    losses: list[float] = []
+    learning_rates: list[float] = []
+    validation_steps: list[int] = []
+    validation_losses: list[float] = []
+    best_validation_loss = float("inf")
+    best_step: int | None = None
+    best_state: dict[str, torch.Tensor] | None = None
+
+    for step in range(1, steps + 1):
+        lr_scale = learning_rate_scale(
+            step=step,
+            total_steps=steps,
+            schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+        )
+        current_lr = learning_rate * lr_scale
+        set_optimizer_lr(optimizer, current_lr)
+        batch = sample_task_batch(
+            train_data,
+            batch_size=batch_size,
+            n_example_points=n_example_points,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        optimizer.zero_grad(set_to_none=True)
+        loss = maml_batch_loss(
+            model,
+            batch=batch,
+            inner_learning_rate=inner_learning_rate,
+            inner_steps=inner_steps,
+        )
+        loss.backward()
+        if gradient_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+        optimizer.step()
+        losses.append(float(loss.detach().cpu()))
+        learning_rates.append(current_lr)
+
+        if should_validate(step, steps=steps, validation_interval=validation_interval):
+            validation_loss = evaluate_maml_toy_loss(
+                model,
+                validation_data=validation_data,
+                batches=validation_batches,
+                batch_size=batch_size,
+                n_example_points=n_example_points,
+                n_query_points=n_query_points,
+                inner_learning_rate=inner_learning_rate,
+                inner_steps=inner_steps,
+                generator=validation_generator,
+                device=device,
+            )
+            validation_steps.append(step)
+            validation_losses.append(validation_loss)
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                best_state = clone_state_dict(model)
+
+    if restore_best and best_state is not None:
+        model.load_state_dict(best_state)
+    return _training_history(
+        losses=losses,
+        learning_rates=learning_rates,
+        validation_steps=validation_steps,
+        validation_losses=validation_losses,
+        best_validation_loss=best_validation_loss,
+        best_step=best_step,
+        restore_best=restore_best,
+        best_state=best_state,
+        optimizer_name=optimizer_name,
+        weight_decay=weight_decay,
+        gradient_clip=gradient_clip,
+        lr_schedule=lr_schedule,
+        warmup_steps=warmup_steps,
+        final_lr_fraction=final_lr_fraction,
+        inner_learning_rate=inner_learning_rate,
+        inner_steps=inner_steps,
+    )
+
+
 def build_optimizer(
     model: torch.nn.Module,
     *,
@@ -569,41 +996,282 @@ def clone_state_dict(model: torch.nn.Module) -> dict[str, torch.Tensor]:
 
 
 @torch.no_grad()
-def evaluate_zero_start_rls(
+def evaluate_direct_toy_loss(
+    model: torch.nn.Module,
+    *,
+    validation_data: dict[float, VanDerPolTaskData],
+    batches: int,
+    batch_size: int,
+    n_query_points: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> float:
+    losses: list[float] = []
+    for _ in range(max(batches, 1)):
+        batch = sample_task_batch(
+            validation_data,
+            batch_size=batch_size,
+            n_example_points=0,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        prediction = model(RuntimeInput(batch["query_x"], batch["query_dt"]))
+        losses.append(float(torch.nn.functional.mse_loss(prediction, batch["query_y"]).cpu()))
+    return _mean(losses)
+
+
+def maml_batch_loss(
+    model: torch.nn.Module,
+    *,
+    batch: dict[str, torch.Tensor],
+    inner_learning_rate: float,
+    inner_steps: int,
+) -> torch.Tensor:
+    task_losses = []
+    for task_index in range(batch["example_x"].shape[0]):
+        adapted_parameters = _adapt_functional_parameters(
+            model,
+            xs=batch["example_x"][task_index : task_index + 1],
+            dt=batch["example_dt"][task_index : task_index + 1],
+            target=batch["example_y"][task_index : task_index + 1],
+            inner_learning_rate=inner_learning_rate,
+            inner_steps=inner_steps,
+        )
+        query_prediction = _functional_forward(
+            model,
+            adapted_parameters,
+            RuntimeInput(
+                batch["query_x"][task_index : task_index + 1],
+                batch["query_dt"][task_index : task_index + 1],
+            ),
+        )
+        task_losses.append(
+            torch.nn.functional.mse_loss(
+                query_prediction,
+                batch["query_y"][task_index : task_index + 1],
+            )
+        )
+    return torch.stack(task_losses).mean()
+
+
+def evaluate_maml_toy_loss(
+    model: torch.nn.Module,
+    *,
+    validation_data: dict[float, VanDerPolTaskData],
+    batches: int,
+    batch_size: int,
+    n_example_points: int,
+    n_query_points: int,
+    inner_learning_rate: float,
+    inner_steps: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> float:
+    losses: list[float] = []
+    was_training = model.training
+    model.eval()
+    for _ in range(max(batches, 1)):
+        batch = sample_task_batch(
+            validation_data,
+            batch_size=batch_size,
+            n_example_points=n_example_points,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        with torch.enable_grad():
+            loss = maml_batch_loss(
+                model,
+                batch=batch,
+                inner_learning_rate=inner_learning_rate,
+                inner_steps=inner_steps,
+            )
+        losses.append(float(loss.detach().cpu()))
+    model.train(was_training)
+    return _mean(losses)
+
+
+def _training_history(
+    *,
+    losses: list[float],
+    learning_rates: list[float],
+    validation_steps: list[int],
+    validation_losses: list[float],
+    best_validation_loss: float,
+    best_step: int | None,
+    restore_best: bool,
+    best_state: dict[str, torch.Tensor] | None,
+    optimizer_name: str,
+    weight_decay: float,
+    gradient_clip: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+    **extra: object,
+) -> dict[str, object]:
+    return {
+        "final_loss": losses[-1] if losses else None,
+        "losses": losses,
+        "learning_rates": learning_rates,
+        "validation_steps": validation_steps,
+        "validation_losses": validation_losses,
+        "best_validation_loss": None
+        if best_step is None
+        else best_validation_loss,
+        "best_step": best_step,
+        "restored_best": bool(restore_best and best_state is not None),
+        "optimizer_name": optimizer_name,
+        "weight_decay": weight_decay,
+        "gradient_clip": gradient_clip,
+        "lr_schedule": lr_schedule,
+        "warmup_steps": warmup_steps,
+        "final_lr_fraction": final_lr_fraction,
+        **extra,
+    }
+
+
+def _functional_forward(
+    model: torch.nn.Module,
+    parameters: dict[str, torch.Tensor],
+    inputs: RuntimeInput,
+) -> torch.Tensor:
+    try:
+        from torch.func import functional_call
+    except ImportError:  # pragma: no cover - for older torch builds.
+        from torch.nn.utils.stateless import functional_call
+
+    return functional_call(model, parameters, (inputs,))
+
+
+def _adapt_functional_parameters(
+    model: torch.nn.Module,
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    target: torch.Tensor,
+    inner_learning_rate: float,
+    inner_steps: int,
+) -> dict[str, torch.Tensor]:
+    adapted = {name: value for name, value in model.named_parameters()}
+    for _ in range(max(inner_steps, 0)):
+        prediction = _functional_forward(model, adapted, RuntimeInput(xs, dt))
+        loss = torch.nn.functional.mse_loss(prediction, target)
+        gradients = torch.autograd.grad(
+            loss,
+            tuple(adapted.values()),
+            create_graph=False,
+            allow_unused=False,
+        )
+        adapted = {
+            name: parameter - inner_learning_rate * gradient.detach()
+            for (name, parameter), gradient in zip(adapted.items(), gradients)
+        }
+    return adapted
+
+
+def add_method_result(
+    *,
+    rows: list[dict[str, object]],
+    scenario_rows: list[dict[str, object]],
+    scenario_predictions: dict[str, torch.Tensor],
+    scenario_errors: dict[str, torch.Tensor],
+    scenario: str,
+    mu: float,
+    name: str,
+    label: str,
+    result: dict[str, object],
+) -> None:
+    row = {
+        "scenario": scenario,
+        "mu": mu,
+        "method": name,
+        "label": label,
+        **result["metrics"],
+    }
+    rows.append(row)
+    scenario_rows.append(row)
+    scenario_predictions[name] = result["predictions"]
+    scenario_errors[name] = result["errors"]
+
+
+def _initial_coefficients_tensor(
+    *,
+    n_coeff: int,
+    reference: torch.Tensor,
+    initial_coefficients: torch.Tensor | None,
+) -> torch.Tensor:
+    if initial_coefficients is None:
+        return torch.zeros(1, n_coeff, dtype=reference.dtype, device=reference.device)
+    coefficients = initial_coefficients.to(dtype=reference.dtype, device=reference.device)
+    if coefficients.ndim == 1:
+        coefficients = coefficients.unsqueeze(0)
+    if coefficients.shape != (1, n_coeff):
+        raise ValueError(
+            "initial_coefficients must have shape [n_coeff] or [1, n_coeff], "
+            f"got {tuple(coefficients.shape)} for n_coeff={n_coeff}"
+        )
+    return coefficients
+
+
+@torch.no_grad()
+def evaluate_coefficient_method(
     model: torch.nn.Module,
     *,
     trajectory: dict[str, torch.Tensor],
+    update_rule: str,
+    initial_coefficients: torch.Tensor | None,
     forgetting_factor: float,
     initial_covariance: float,
     measurement_noise: float,
+    kalman_process_noise: float,
+    coefficient_sgd_learning_rate: float,
+    coefficient_sgd_momentum: float,
+    coefficient_sgd_weight_decay: float,
+    coefficient_window_size: int,
+    coefficient_window_ridge: float,
     recursive_horizons: tuple[int, ...],
 ) -> dict[str, object]:
     xs = trajectory["xs"]
     dt = trajectory["dt"]
     target = trajectory["deltas"]
     n_coeff = int(model.n_basis)
-    state = RLSState(
-        coefficients=torch.zeros(1, n_coeff, dtype=xs.dtype, device=xs.device),
-        covariance=initial_covariance
-        * torch.eye(n_coeff, dtype=xs.dtype, device=xs.device).unsqueeze(0),
+    initial_coefficients = _initial_coefficients_tensor(
+        n_coeff=n_coeff,
+        reference=xs,
+        initial_coefficients=initial_coefficients,
     )
+    method = TorchCoefficientMethod(
+        model,
+        update_rule="rls" if update_rule == "static" else update_rule,
+        output_dim=2,
+        forgetting_factor=forgetting_factor,
+        initial_covariance=initial_covariance,
+        measurement_noise=measurement_noise,
+        process_noise=kalman_process_noise,
+        learning_rate=coefficient_sgd_learning_rate,
+        momentum=coefficient_sgd_momentum,
+        weight_decay=coefficient_sgd_weight_decay,
+        window_size=coefficient_window_size,
+        ridge=coefficient_window_ridge,
+        initial_coefficients=initial_coefficients,
+        device=xs.device,
+        dtype=xs.dtype,
+    )
+    state = method.initial_state()
     predictions: list[torch.Tensor] = []
     coefficients: list[torch.Tensor] = []
     for index in range(xs.shape[0]):
-        features = model(
-            RuntimeInput(
-                xs[index : index + 1].unsqueeze(0),
-                dt[index : index + 1].unsqueeze(0),
+        inputs = RuntimeInput(
+            xs[index : index + 1].unsqueeze(0),
+            dt[index : index + 1].unsqueeze(0),
+        )
+        prediction = method.predict(state, inputs).squeeze(0).squeeze(0)
+        if update_rule != "static":
+            state = method.update(
+                state,
+                Observation(inputs=inputs, target=target[index : index + 1].unsqueeze(0)),
             )
-        )
-        prediction = linear_predict(features, state.coefficients).squeeze(0).squeeze(0)
-        state = rls_update(
-            state,
-            features.squeeze(1),
-            target[index : index + 1],
-            forgetting_factor=forgetting_factor,
-            measurement_noise=measurement_noise,
-        )
         predictions.append(prediction.detach())
         coefficients.append(state.coefficients.squeeze(0).detach())
 
@@ -620,6 +1288,7 @@ def evaluate_zero_start_rls(
             predictor=model,
             trajectory=trajectory,
             coefficient_history=coefficient_history,
+            initial_coefficients=initial_coefficients.squeeze(0),
             horizons=recursive_horizons,
         )
     )
@@ -633,6 +1302,108 @@ def evaluate_zero_start_rls(
         "predictions": prediction_tensor.cpu(),
         "errors": errors.cpu(),
         "coefficient_history": coefficient_history.cpu(),
+        "initial_coefficients": initial_coefficients.squeeze(0).detach().cpu(),
+        "metrics": metrics,
+    }
+
+
+@torch.no_grad()
+def evaluate_direct_model(
+    model: torch.nn.Module,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    recursive_horizons: tuple[int, ...],
+) -> dict[str, object]:
+    xs = trajectory["xs"]
+    dt = trajectory["dt"]
+    target = trajectory["deltas"]
+    was_training = model.training
+    model.eval()
+    predictions = model(RuntimeInput(xs.unsqueeze(0), dt.unsqueeze(0))).squeeze(0)
+    model.train(was_training)
+    errors = torch.linalg.norm(predictions - target, dim=-1)
+    metrics = summarize_online_errors(errors=errors, predictions=predictions, target=target)
+    metrics.update(
+        summarize_recursive_direct_errors(
+            model,
+            trajectory=trajectory,
+            horizons=recursive_horizons,
+        )
+    )
+    metrics.update(
+        {
+            "final_coefficient_norm": float("nan"),
+            "mean_coefficient_norm": float("nan"),
+        }
+    )
+    return {
+        "predictions": predictions.cpu(),
+        "errors": errors.cpu(),
+        "metrics": metrics,
+    }
+
+
+def evaluate_maml_online(
+    model: torch.nn.Module,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    inner_learning_rate: float,
+    inner_steps: int,
+    recursive_horizons: tuple[int, ...],
+    device: torch.device,
+) -> dict[str, object]:
+    xs = trajectory["xs"]
+    dt = trajectory["dt"]
+    target = trajectory["deltas"]
+    adapted = copy.deepcopy(model).to(device)
+    adapted.train()
+    optimizer = torch.optim.SGD(adapted.parameters(), lr=inner_learning_rate)
+    predictions: list[torch.Tensor] = []
+    state_history: list[dict[str, torch.Tensor]] = []
+
+    for index in range(xs.shape[0]):
+        inputs = RuntimeInput(
+            xs[index : index + 1].unsqueeze(0),
+            dt[index : index + 1].unsqueeze(0),
+        )
+        with torch.no_grad():
+            prediction = adapted(inputs).squeeze(0).squeeze(0)
+        predictions.append(prediction.detach())
+        for _ in range(max(inner_steps, 0)):
+            optimizer.zero_grad(set_to_none=True)
+            update_prediction = adapted(inputs).squeeze(0)
+            loss = torch.nn.functional.mse_loss(
+                update_prediction,
+                target[index : index + 1],
+            )
+            loss.backward()
+            optimizer.step()
+        state_history.append(clone_state_dict(adapted))
+
+    prediction_tensor = torch.stack(predictions)
+    errors = torch.linalg.norm(prediction_tensor - target, dim=-1)
+    metrics = summarize_online_errors(
+        errors=errors,
+        predictions=prediction_tensor,
+        target=target,
+    )
+    metrics.update(
+        summarize_recursive_direct_errors(
+            model,
+            trajectory=trajectory,
+            horizons=recursive_horizons,
+            state_history=state_history,
+        )
+    )
+    metrics.update(
+        {
+            "final_coefficient_norm": float("nan"),
+            "mean_coefficient_norm": float("nan"),
+        }
+    )
+    return {
+        "predictions": prediction_tensor.cpu(),
+        "errors": errors.cpu(),
         "metrics": metrics,
     }
 
@@ -667,6 +1438,7 @@ def summarize_recursive_errors(
     trajectory: dict[str, torch.Tensor],
     coefficient_history: torch.Tensor | None,
     horizons: tuple[int, ...],
+    initial_coefficients: torch.Tensor | None = None,
     max_rollouts: int = 64,
 ) -> dict[str, float]:
     states = trajectory["states"]
@@ -691,11 +1463,16 @@ def summarize_recursive_errors(
         step_errors: list[float] = []
         coefficients = None
         if coefficient_history is not None:
-            coefficients = (
-                torch.zeros_like(coefficient_history[0]).unsqueeze(0)
-                if start == 0
-                else coefficient_history[start - 1].unsqueeze(0)
-            )
+            if start == 0:
+                if initial_coefficients is None:
+                    coefficients = torch.zeros_like(coefficient_history[0]).unsqueeze(0)
+                else:
+                    coefficients = initial_coefficients.to(
+                        device=states.device,
+                        dtype=states.dtype,
+                    ).unsqueeze(0)
+            else:
+                coefficients = coefficient_history[start - 1].unsqueeze(0)
         for offset in range(max_horizon):
             index = start + offset
             if predictor is None:
@@ -709,6 +1486,65 @@ def summarize_recursive_errors(
                 )
                 assert coefficients is not None
                 delta = linear_predict(features, coefficients).squeeze(0).squeeze(0)
+            current = current + delta
+            error = float(torch.linalg.norm(current - states[index + 1]))
+            step_errors.append(error)
+            horizon = offset + 1
+            if horizon in horizon_errors:
+                horizon_errors[horizon].append(error)
+                horizon_accumulated[horizon].append(sum(step_errors))
+
+    metrics: dict[str, float] = {}
+    for horizon in valid_horizons:
+        prefix = f"recursive_k{horizon}"
+        metrics[f"{prefix}_final_step_error_mean"] = _mean(horizon_errors[horizon])
+        metrics[f"{prefix}_accumulated_error_mean"] = _mean(horizon_accumulated[horizon])
+    return metrics
+
+
+@torch.no_grad()
+def summarize_recursive_direct_errors(
+    model: torch.nn.Module,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    horizons: tuple[int, ...],
+    max_rollouts: int = 64,
+    state_history: list[dict[str, torch.Tensor]] | None = None,
+) -> dict[str, float]:
+    states = trajectory["states"]
+    dt = trajectory["dt"]
+    valid_horizons = sorted({horizon for horizon in horizons if 0 < horizon < states.shape[0]})
+    if not valid_horizons:
+        return {}
+    max_horizon = max(valid_horizons)
+    max_start = states.shape[0] - max_horizon - 1
+    starts = torch.linspace(
+        0,
+        max_start,
+        steps=min(max_rollouts, max_start + 1),
+        device=states.device,
+    ).round().to(torch.long).unique(sorted=True)
+    horizon_errors: dict[int, list[float]] = {horizon: [] for horizon in valid_horizons}
+    horizon_accumulated: dict[int, list[float]] = {horizon: [] for horizon in valid_horizons}
+    base_state = clone_state_dict(model)
+
+    for start_tensor in starts:
+        start = int(start_tensor.item())
+        rollout_model = model
+        if state_history is not None:
+            rollout_model = copy.deepcopy(model).to(states.device)
+            rollout_model.load_state_dict(base_state if start == 0 else state_history[start - 1])
+        rollout_model.eval()
+        current = states[start].clone()
+        step_errors: list[float] = []
+        for offset in range(max_horizon):
+            index = start + offset
+            delta = rollout_model(
+                RuntimeInput(
+                    current.reshape(1, 1, -1),
+                    dt[index : index + 1].reshape(1, 1),
+                )
+            ).squeeze(0).squeeze(0)
             current = current + delta
             error = float(torch.linalg.norm(current - states[index + 1]))
             step_errors.append(error)
@@ -1128,6 +1964,7 @@ def write_rollout_snapshot_plot(
     trajectory: dict[str, torch.Tensor],
     methods: dict[str, torch.nn.Module],
     coefficient_histories: dict[str, torch.Tensor],
+    initial_coefficients: dict[str, torch.Tensor],
     labels: dict[str, str],
     rollout_horizon: int = 100,
 ) -> None:
@@ -1151,6 +1988,7 @@ def write_rollout_snapshot_plot(
                 model,
                 trajectory=trajectory,
                 coefficient_history=coefficient_histories[name],
+                initial_coefficients=initial_coefficients.get(name),
                 start=start,
                 horizon=horizon,
             )
@@ -1307,6 +2145,7 @@ def rollout_fixed_coefficients(
     coefficient_history: torch.Tensor | None,
     start: int,
     horizon: int,
+    initial_coefficients: torch.Tensor | None = None,
 ) -> torch.Tensor:
     states = trajectory["states"]
     dt = trajectory["dt"]
@@ -1317,6 +2156,7 @@ def rollout_fixed_coefficients(
         assert coefficient_history is not None
         coefficients = _coefficients_for_rollout_start(
             coefficient_history=coefficient_history,
+            initial_coefficients=initial_coefficients,
             start=start,
             device=states.device,
             dtype=states.dtype,
@@ -1534,12 +2374,17 @@ def _stream_components(vectors: torch.Tensor, *, grid_size: int) -> tuple[torch.
 def _coefficients_for_rollout_start(
     *,
     coefficient_history: torch.Tensor,
+    initial_coefficients: torch.Tensor | None,
     start: int,
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
     if start <= 0:
-        coefficients = torch.zeros_like(coefficient_history[0])
+        coefficients = (
+            torch.zeros_like(coefficient_history[0])
+            if initial_coefficients is None
+            else initial_coefficients
+        )
     else:
         coefficients = coefficient_history[min(start - 1, coefficient_history.shape[0] - 1)]
     return coefficients.to(device=device, dtype=dtype).unsqueeze(0)

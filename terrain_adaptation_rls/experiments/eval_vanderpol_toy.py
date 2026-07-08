@@ -60,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--forgetting-factor", type=float, default=0.98)
     parser.add_argument("--initial-covariance", type=float, default=100.0)
     parser.add_argument("--measurement-noise", type=float, default=1e-5)
+    parser.add_argument("--kalman-process-noise", type=float, default=0.0)
+    parser.add_argument("--coefficient-sgd-learning-rate", type=float, default=1.0)
+    parser.add_argument("--coefficient-sgd-momentum", type=float, default=0.0)
+    parser.add_argument("--coefficient-sgd-weight-decay", type=float, default=0.0)
+    parser.add_argument("--coefficient-window-size", type=int, default=64)
+    parser.add_argument("--coefficient-window-ridge", type=float, default=1e-6)
+    parser.add_argument("--maml-inner-learning-rate", type=float, default=1e-2)
+    parser.add_argument("--maml-inner-steps", type=int, default=1)
     parser.add_argument(
         "--diagnostics-mode",
         choices=("all", "first", "none"),
@@ -87,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(
             "valid Van der Pol toy evaluation: "
-            "FE-ODE basis, FE-MLP basis, NeuralFly-style basis; "
+            "FE coefficient variants, NeuralFly, NODE-static, MAML-static/online; "
             f"seeds={seeds}, devices={devices}, "
             f"optimizer={args.optimizer}, lr_schedule={args.lr_schedule}"
         )
@@ -127,6 +135,14 @@ def main(argv: list[str] | None = None) -> int:
             "forgetting_factor": args.forgetting_factor,
             "initial_covariance": args.initial_covariance,
             "measurement_noise": args.measurement_noise,
+            "kalman_process_noise": args.kalman_process_noise,
+            "coefficient_sgd_learning_rate": args.coefficient_sgd_learning_rate,
+            "coefficient_sgd_momentum": args.coefficient_sgd_momentum,
+            "coefficient_sgd_weight_decay": args.coefficient_sgd_weight_decay,
+            "coefficient_window_size": args.coefficient_window_size,
+            "coefficient_window_ridge": args.coefficient_window_ridge,
+            "maml_inner_learning_rate": args.maml_inner_learning_rate,
+            "maml_inner_steps": args.maml_inner_steps,
             "diagnostics_mode": args.diagnostics_mode,
         },
     )
@@ -169,6 +185,14 @@ def main(argv: list[str] | None = None) -> int:
                 "forgetting_factor": args.forgetting_factor,
                 "initial_covariance": args.initial_covariance,
                 "measurement_noise": args.measurement_noise,
+                "kalman_process_noise": args.kalman_process_noise,
+                "coefficient_sgd_learning_rate": args.coefficient_sgd_learning_rate,
+                "coefficient_sgd_momentum": args.coefficient_sgd_momentum,
+                "coefficient_sgd_weight_decay": args.coefficient_sgd_weight_decay,
+                "coefficient_window_size": args.coefficient_window_size,
+                "coefficient_window_ridge": args.coefficient_window_ridge,
+                "maml_inner_learning_rate": args.maml_inner_learning_rate,
+                "maml_inner_steps": args.maml_inner_steps,
                 "write_diagnostics": write_diagnostics,
             }
         )
