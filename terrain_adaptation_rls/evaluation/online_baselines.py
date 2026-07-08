@@ -1425,9 +1425,19 @@ class _MAMLOnlinePredictor:
         self.rollout_start: int | None = None
 
     def begin_rollout(self, start_index: int) -> None:
-        self.rollout_model = copy.deepcopy(self.initial_model).to(self.device)
+        if (
+            self.rollout_model is not None
+            and self.rollout_start is not None
+            and start_index >= self.rollout_start
+        ):
+            begin_index = self.rollout_start
+        else:
+            self.rollout_model = copy.deepcopy(self.initial_model).to(self.device)
+            begin_index = 0
+
+        assert self.rollout_model is not None
         with torch.enable_grad():
-            for idx in range(start_index):
+            for idx in range(begin_index, start_index):
                 adapt_model(
                     self.rollout_model,
                     support_data=(
