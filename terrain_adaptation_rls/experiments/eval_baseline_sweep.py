@@ -10,6 +10,7 @@ from terrain_adaptation_rls.evaluation.artifacts import create_run_dir, write_js
 
 from .eval_online_baselines import (
     _validate_fe_run_dir,
+    _validate_maml_run_dir,
     _validate_neuralfly_run_dir,
     _validate_node_run_dir,
 )
@@ -24,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--neuralfly-run-dir", default=None)
     parser.add_argument("--node-run-dir", default=None)
+    parser.add_argument("--maml-run-dir", default=None)
     parser.add_argument(
         "--split",
         default="heldout",
@@ -53,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fe-sgd-weight-decay", type=float, default=0.0)
     parser.add_argument("--fe-window-size", type=int, default=100)
     parser.add_argument("--fe-window-ridge", type=float, default=1e-6)
+    parser.add_argument("--maml-inner-learning-rate", type=float, default=None)
+    parser.add_argument("--maml-inner-steps", type=int, default=None)
     parser.add_argument("--linear-no-bias", action="store_true")
     parser.add_argument(
         "--skip-recursive-k-step",
@@ -85,11 +89,14 @@ def main(argv: list[str] | None = None) -> int:
     fe_run_dir = Path(args.fe_run_dir)
     neuralfly_run_dir = None if args.neuralfly_run_dir is None else Path(args.neuralfly_run_dir)
     node_run_dir = None if args.node_run_dir is None else Path(args.node_run_dir)
+    maml_run_dir = None if args.maml_run_dir is None else Path(args.maml_run_dir)
     _validate_fe_run_dir(fe_run_dir)
     if neuralfly_run_dir is not None:
         _validate_neuralfly_run_dir(neuralfly_run_dir)
     if node_run_dir is not None:
         _validate_node_run_dir(node_run_dir)
+    if maml_run_dir is not None:
+        _validate_maml_run_dir(maml_run_dir)
 
     from terrain_adaptation_rls.evaluation.baseline_sweep import resolve_sweep_windows
 
@@ -118,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             "fe_run_dir": fe_run_dir,
             "neuralfly_run_dir": neuralfly_run_dir,
             "node_run_dir": node_run_dir,
+            "maml_run_dir": maml_run_dir,
             "split": args.split,
             "scenes": args.scenes,
             "device": args.device,
@@ -135,6 +143,8 @@ def main(argv: list[str] | None = None) -> int:
             "fe_sgd_weight_decay": args.fe_sgd_weight_decay,
             "fe_window_size": args.fe_window_size,
             "fe_window_ridge": args.fe_window_ridge,
+            "maml_inner_learning_rate": args.maml_inner_learning_rate,
+            "maml_inner_steps": args.maml_inner_steps,
             "linear_include_bias": not args.linear_no_bias,
             "include_recursive_k_step": not args.skip_recursive_k_step,
             "recursive_k_step_horizons": args.recursive_k_step_horizons,
@@ -149,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         fe_run_dir=fe_run_dir,
         neuralfly_run_dir=neuralfly_run_dir,
         node_run_dir=node_run_dir,
+        maml_run_dir=maml_run_dir,
         artifact_dir=run_dir,
         scenes=args.scenes,
         split=args.split,
@@ -168,6 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         fe_window_size=args.fe_window_size,
         fe_window_ridge=args.fe_window_ridge,
         linear_include_bias=not args.linear_no_bias,
+        maml_inner_learning_rate=args.maml_inner_learning_rate,
+        maml_inner_steps=args.maml_inner_steps,
         include_recursive_k_step=not args.skip_recursive_k_step,
         recursive_k_step_horizons=tuple(args.recursive_k_step_horizons),
         recursive_k_step_max_rollouts=args.recursive_k_step_max_rollouts,

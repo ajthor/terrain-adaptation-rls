@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional static Neural ODE training artifact directory.",
     )
+    parser.add_argument(
+        "--maml-run-dir",
+        default=None,
+        help="Optional MAML training artifact directory.",
+    )
     parser.add_argument("--scene", default="scene1", help="Scene to stream through each method.")
     parser.add_argument("--run-name", default="online_baselines", help="Optional run name.")
     parser.add_argument("--output-root", default="outputs", help="Root for eval artifacts.")
@@ -56,6 +61,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fe-window-size", type=int, default=100)
     parser.add_argument("--fe-window-ridge", type=float, default=1e-6)
     parser.add_argument(
+        "--maml-inner-learning-rate",
+        type=float,
+        default=None,
+        help="Optional override for online MAML inner-loop learning rate.",
+    )
+    parser.add_argument(
+        "--maml-inner-steps",
+        type=int,
+        default=None,
+        help="Optional override for online MAML adaptation steps per observation.",
+    )
+    parser.add_argument(
         "--linear-no-bias",
         action="store_true",
         help="Disable the constant feature in the no-training linear baseline.",
@@ -73,20 +90,25 @@ def main(argv: list[str] | None = None) -> int:
     fe_run_dir = Path(args.fe_run_dir)
     neuralfly_run_dir = None if args.neuralfly_run_dir is None else Path(args.neuralfly_run_dir)
     node_run_dir = None if args.node_run_dir is None else Path(args.node_run_dir)
+    maml_run_dir = None if args.maml_run_dir is None else Path(args.maml_run_dir)
     _validate_fe_run_dir(fe_run_dir)
     if neuralfly_run_dir is not None:
         _validate_neuralfly_run_dir(neuralfly_run_dir)
     if node_run_dir is not None:
         _validate_node_run_dir(node_run_dir)
+    if maml_run_dir is not None:
+        _validate_maml_run_dir(maml_run_dir)
 
     if args.dry_run:
         neuralfly_text = (
             "none" if neuralfly_run_dir is None else neuralfly_run_dir.as_posix()
         )
         node_text = "none" if node_run_dir is None else node_run_dir.as_posix()
+        maml_text = "none" if maml_run_dir is None else maml_run_dir.as_posix()
         print(
             f"valid online baseline eval: fe_run={fe_run_dir} "
-            f"neuralfly_run={neuralfly_text} node_run={node_text} scene={args.scene}"
+            f"neuralfly_run={neuralfly_text} node_run={node_text} "
+            f"maml_run={maml_text} scene={args.scene}"
         )
         return 0
 
@@ -98,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
             "fe_run_dir": fe_run_dir,
             "neuralfly_run_dir": neuralfly_run_dir,
             "node_run_dir": node_run_dir,
+            "maml_run_dir": maml_run_dir,
             "scene": args.scene,
             "device": args.device,
             "max_points": args.max_points,
@@ -113,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
             "fe_sgd_weight_decay": args.fe_sgd_weight_decay,
             "fe_window_size": args.fe_window_size,
             "fe_window_ridge": args.fe_window_ridge,
+            "maml_inner_learning_rate": args.maml_inner_learning_rate,
+            "maml_inner_steps": args.maml_inner_steps,
             "linear_include_bias": not args.linear_no_bias,
         },
     )
@@ -125,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
         fe_run_dir=fe_run_dir,
         neuralfly_run_dir=neuralfly_run_dir,
         node_run_dir=node_run_dir,
+        maml_run_dir=maml_run_dir,
         artifact_dir=run_dir,
         scene=args.scene,
         device=args.device,
@@ -141,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         fe_sgd_weight_decay=args.fe_sgd_weight_decay,
         fe_window_size=args.fe_window_size,
         fe_window_ridge=args.fe_window_ridge,
+        maml_inner_learning_rate=args.maml_inner_learning_rate,
+        maml_inner_steps=args.maml_inner_steps,
         linear_include_bias=not args.linear_no_bias,
     )
     print(run_dir)
@@ -166,6 +194,13 @@ def _validate_node_run_dir(path: Path) -> None:
         raise ValueError(f"{path} does not contain resolved_config.json")
     if not (path / "neural_ode_model.pth").is_file():
         raise ValueError(f"{path} does not contain neural_ode_model.pth")
+
+
+def _validate_maml_run_dir(path: Path) -> None:
+    if not (path / "resolved_config.json").is_file():
+        raise ValueError(f"{path} does not contain resolved_config.json")
+    if not (path / "maml_model.pth").is_file():
+        raise ValueError(f"{path} does not contain maml_model.pth")
 
 
 if __name__ == "__main__":

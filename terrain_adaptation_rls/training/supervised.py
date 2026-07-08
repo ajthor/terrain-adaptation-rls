@@ -54,9 +54,12 @@ def build_model_from_config(
         )
 
     if family in {"maml", "maml_neural_ode"}:
-        raise NotImplementedError(
-            "MAML meta-training still needs to be ported from the missing legacy "
-            "meta_learning dependency."
+        from terrain_adaptation_rls.models.maml import create_model, loss_fn
+
+        return BuiltModel(
+            model=create_model(device, n_basis=n_basis, hidden_size=hidden_size),
+            loss_fn=loss_fn,
+            family="maml_neural_ode",
         )
 
     raise ValueError(f"Unknown model family '{family}'")
@@ -139,6 +142,15 @@ def run_configured_supervised_training(
         from terrain_adaptation_rls.training.neuralfly import run_neuralfly_style_training
 
         return run_neuralfly_style_training(
+            config,
+            device=device,
+            max_steps=max_steps,
+            artifact_dir=artifact_dir,
+        )
+    if family in {"maml", "maml_neural_ode"}:
+        from terrain_adaptation_rls.training.maml import run_maml_training
+
+        return run_maml_training(
             config,
             device=device,
             max_steps=max_steps,

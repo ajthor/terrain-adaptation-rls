@@ -9,6 +9,7 @@ from terrain_adaptation_rls.experiments import train
 from terrain_adaptation_rls.experiments import eval_online_baselines
 from terrain_adaptation_rls.experiments import eval_fe_rls
 from terrain_adaptation_rls.experiments import train_fe
+from terrain_adaptation_rls.experiments import train_maml
 from terrain_adaptation_rls.experiments import train_neuralfly
 from terrain_adaptation_rls.experiments import train_node
 from terrain_adaptation_rls.training import DistributedContext
@@ -222,6 +223,37 @@ class TrainingEntrypointTests(unittest.TestCase):
         self.assertIn("valid NODE train config", stdout.getvalue())
         self.assertFalse(output_dir.exists())
 
+    def test_train_maml_dry_run_validates_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "train_maml.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "name": "debug_maml",
+                        "kind": "train",
+                        "platform": "warty",
+                        "output_root": (Path(tmpdir) / "outputs").as_posix(),
+                        "model": {
+                            "family": "maml_neural_ode",
+                            "hidden_size": 8,
+                            "n_basis": 2,
+                        },
+                        "training": {
+                            "steps": 1,
+                        },
+                    }
+                )
+            )
+
+            with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                exit_code = train_maml.main(["--config", config_path.as_posix(), "--dry-run"])
+
+            output_dir = Path(tmpdir) / "outputs"
+
+        self.assertEqual(exit_code, 0)
+        self.assertIn("valid MAML train config", stdout.getvalue())
+        self.assertFalse(output_dir.exists())
+
     def test_eval_fe_rls_dry_run_validates_train_run(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             train_run_dir = Path(tmpdir) / "train_run"
@@ -287,6 +319,19 @@ class TrainingEntrypointTests(unittest.TestCase):
                 )
             )
             (node_run_dir / "neural_ode_model.pth").write_bytes(b"placeholder")
+            maml_run_dir = Path(tmpdir) / "maml_train_run"
+            maml_run_dir.mkdir()
+            (maml_run_dir / "resolved_config.json").write_text(
+                json.dumps(
+                    {
+                        "name": "debug_maml",
+                        "kind": "train",
+                        "platform": "warty",
+                        "model": {"family": "maml_neural_ode"},
+                    }
+                )
+            )
+            (maml_run_dir / "maml_model.pth").write_bytes(b"placeholder")
 
             with contextlib.redirect_stdout(io.StringIO()) as stdout:
                 exit_code = eval_online_baselines.main(
@@ -297,6 +342,8 @@ class TrainingEntrypointTests(unittest.TestCase):
                         neuralfly_run_dir.as_posix(),
                         "--node-run-dir",
                         node_run_dir.as_posix(),
+                        "--maml-run-dir",
+                        maml_run_dir.as_posix(),
                         "--dry-run",
                     ]
                 )

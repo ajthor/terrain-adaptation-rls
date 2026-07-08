@@ -57,15 +57,16 @@ class SupervisedTrainingTests(unittest.TestCase):
         self.assertEqual(metrics["steps"], 2)
         self.assertEqual(len(metrics["losses"]), 2)
 
-    def test_maml_training_reports_missing_port(self):
+    def test_builds_maml_from_config(self):
         config = ExperimentConfig(
             name="maml",
             kind="train",
-            model={"family": "maml_neural_ode"},
+            model={"family": "maml_neural_ode", "hidden_size": 8, "n_basis": 2},
         )
 
-        with self.assertRaisesRegex(NotImplementedError, "MAML meta-training"):
-            build_model_from_config(config, device="cpu")
+        built = build_model_from_config(config, device="cpu")
+
+        self.assertEqual(built.family, "maml_neural_ode")
 
     def test_scene_sequence_batch_keeps_query_order(self):
         inputs = torch.zeros(10, 9)

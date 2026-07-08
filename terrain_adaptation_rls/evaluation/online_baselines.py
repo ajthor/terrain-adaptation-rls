@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import json
 from dataclasses import dataclass
@@ -34,6 +35,8 @@ from terrain_adaptation_rls.training.neuralfly import (
     predict_neuralfly_style_batch,
 )
 from terrain_adaptation_rls.training.supervised import scene_supervised_batch
+from terrain_adaptation_rls.models.maml import loss_fn as maml_loss_fn
+from terrain_adaptation_rls.training.maml import adapt_model, load_trained_maml
 
 
 METHOD_LABELS = {
@@ -45,6 +48,7 @@ METHOD_LABELS = {
     "neuralfly_rls": "NeuralFly-style RLS",
     "offline_neuralfly": "offline NeuralFly-style",
     "static_node": "static NODE",
+    "maml_online": "MAML-online",
     "linear_rls": "linear RLS",
     "offline_linear": "offline linear",
     "zero_delta": "zero delta",
@@ -66,6 +70,7 @@ def run_online_baseline_comparison(
     scene: str,
     neuralfly_run_dir: str | Path | None = None,
     node_run_dir: str | Path | None = None,
+    maml_run_dir: str | Path | None = None,
     device: torch.device | str = "cpu",
     max_points: int = 512,
     start_index: int = 0,
@@ -81,6 +86,8 @@ def run_online_baseline_comparison(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    maml_inner_learning_rate: float | None = None,
+    maml_inner_steps: int | None = None,
     include_recursive_k_step: bool = True,
     recursive_k_step_horizons: tuple[int, ...] = (1, 5, 10, 20, 50),
     recursive_k_step_max_rollouts: int = 64,
@@ -90,6 +97,7 @@ def run_online_baseline_comparison(
     fe_run_dir = Path(fe_run_dir)
     neuralfly_run_path = None if neuralfly_run_dir is None else Path(neuralfly_run_dir)
     node_run_path = None if node_run_dir is None else Path(node_run_dir)
+    maml_run_path = None if maml_run_dir is None else Path(maml_run_dir)
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +129,8 @@ def run_online_baseline_comparison(
     predictions: dict[str, torch.Tensor] = {}
     coefficient_histories: dict[str, torch.Tensor] = {}
     recursive_predictors: dict[str, object] = {}
+    resolved_maml_inner_lr: float | None = None
+    resolved_maml_inner_steps: int | None = None
 
     fe_model = load_trained_function_encoder(fe_config, fe_run_dir, device=device)
     fe_coefficients, _ = fe_model.compute_coefficients((example_xs, example_dt), example_ys)
@@ -249,6 +259,45 @@ def run_online_baseline_comparison(
         predictions["static_node"] = node_model((xs, dt)).detach().cpu()
         recursive_predictors["static_node"] = _DirectModelPredictor(node_model)
 
+    if maml_run_path is not None:
+        maml_config = load_config(maml_run_path / "resolved_config.json")
+        maml_model = load_trained_maml(maml_config, maml_run_path, device=device)
+        maml_inner_lr = (
+            float(maml_inner_learning_rate)
+            if maml_inner_learning_rate is not None
+            else float(
+                maml_config.training.get(
+                    "inner_learning_rate",
+                    maml_config.training.get("inner_lr", 1e-2),
+                )
+            )
+        )
+        maml_steps = (
+            int(maml_inner_steps)
+            if maml_inner_steps is not None
+            else int(maml_config.training.get("inner_steps", 1))
+        )
+        resolved_maml_inner_lr = maml_inner_lr
+        resolved_maml_inner_steps = maml_steps
+        predictions["maml_online"] = stream_maml_online(
+            maml_model,
+            xs=xs,
+            dt=dt,
+            target=target,
+            inner_lr=maml_inner_lr,
+            inner_steps=maml_steps,
+            device=device,
+        )
+        recursive_predictors["maml_online"] = _MAMLOnlinePredictor(
+            maml_model,
+            xs=xs,
+            dt=dt,
+            target=target,
+            inner_lr=maml_inner_lr,
+            inner_steps=maml_steps,
+            device=device,
+        )
+
     linear_provider = LinearBasisProvider(
         input_dim=9,
         output_dim=6,
@@ -329,6 +378,8 @@ def run_online_baseline_comparison(
         fe_window_size=fe_window_size,
         fe_window_ridge=fe_window_ridge,
         linear_include_bias=linear_include_bias,
+        maml_inner_learning_rate=resolved_maml_inner_lr,
+        maml_inner_steps=resolved_maml_inner_steps,
         include_recursive_k_step=include_recursive_k_step,
         recursive_k_step_horizons=recursive_k_step_horizons,
         recursive_k_step_max_rollouts=recursive_k_step_max_rollouts,
@@ -401,6 +452,44 @@ def stream_runtime_method(
     return torch.stack(predictions).unsqueeze(0), torch.stack(coefficients)
 
 
+def stream_maml_online(
+    model: torch.nn.Module,
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    target: torch.Tensor,
+    inner_lr: float,
+    inner_steps: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Stream a MAML initialization with predict-before-update adaptation."""
+
+    adapted_model = copy.deepcopy(model)
+    adapted_model.to(device)
+    predictions: list[torch.Tensor] = []
+    for idx in range(xs.shape[1]):
+        adapted_model.eval()
+        with torch.no_grad():
+            prediction = adapted_model((xs[:, idx : idx + 1], dt[:, idx : idx + 1]))
+        predictions.append(prediction.squeeze(0).squeeze(0).detach().cpu())
+        with torch.enable_grad():
+            adapt_model(
+                adapted_model,
+                support_data=(
+                    xs[:, idx : idx + 1],
+                    dt[:, idx : idx + 1],
+                    target[:, idx : idx + 1],
+                ),
+                loss_fn=maml_loss_fn,
+                inner_lr=inner_lr,
+                inner_steps=inner_steps,
+                device=device,
+                clone=False,
+            )
+
+    return torch.stack(predictions).unsqueeze(0)
+
+
 @torch.no_grad()
 def summarize_recursive_k_step_metrics(
     *,
@@ -442,6 +531,9 @@ def summarize_recursive_k_step_metrics(
 
         for start_tensor in starts:
             start = int(start_tensor.item())
+            begin_rollout = getattr(predictor, "begin_rollout", None)
+            if begin_rollout is not None:
+                begin_rollout(start)
             state = xs_single[start, :6].clone()
             step_errors: list[float] = []
             for offset in range(max_horizon):
@@ -501,6 +593,8 @@ def summarize_baseline_predictions(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    maml_inner_learning_rate: float | None = None,
+    maml_inner_steps: int | None = None,
     include_recursive_k_step: bool = True,
     recursive_k_step_horizons: tuple[int, ...] = (1, 5, 10, 20, 50),
     recursive_k_step_max_rollouts: int = 64,
@@ -584,6 +678,10 @@ def summarize_baseline_predictions(
         },
         "linear_baseline": {
             "include_bias": linear_include_bias,
+        },
+        "maml_parameters": {
+            "inner_learning_rate": maml_inner_learning_rate,
+            "inner_steps": maml_inner_steps,
         },
         "recursive_k_step": {
             "include": include_recursive_k_step,
@@ -1059,6 +1157,63 @@ class _DirectModelPredictor:
         return self.model((xs_step, dt_step)).squeeze(0).squeeze(0)
 
 
+class _MAMLOnlinePredictor:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        *,
+        xs: torch.Tensor,
+        dt: torch.Tensor,
+        target: torch.Tensor,
+        inner_lr: float,
+        inner_steps: int,
+        device: torch.device,
+    ) -> None:
+        self.initial_model = copy.deepcopy(model)
+        self.xs = xs
+        self.dt = dt
+        self.target = target
+        self.inner_lr = inner_lr
+        self.inner_steps = inner_steps
+        self.device = device
+        self.rollout_model: torch.nn.Module | None = None
+        self.rollout_start: int | None = None
+
+    def begin_rollout(self, start_index: int) -> None:
+        self.rollout_model = copy.deepcopy(self.initial_model).to(self.device)
+        with torch.enable_grad():
+            for idx in range(start_index):
+                adapt_model(
+                    self.rollout_model,
+                    support_data=(
+                        self.xs[:, idx : idx + 1],
+                        self.dt[:, idx : idx + 1],
+                        self.target[:, idx : idx + 1],
+                    ),
+                    loss_fn=maml_loss_fn,
+                    inner_lr=self.inner_lr,
+                    inner_steps=self.inner_steps,
+                    device=self.device,
+                    clone=False,
+                )
+        self.rollout_model.eval()
+        self.rollout_start = start_index
+
+    def predict(
+        self,
+        *,
+        state: torch.Tensor,
+        control: torch.Tensor,
+        dt: torch.Tensor,
+        start_index: int,
+    ) -> torch.Tensor:
+        if self.rollout_model is None or self.rollout_start != start_index:
+            self.begin_rollout(start_index)
+        assert self.rollout_model is not None
+        xs_step, dt_step = _rollout_input_tensors(state=state, control=control, dt=dt)
+        return self.rollout_model((xs_step, dt_step)).squeeze(0).squeeze(0)
+
+
 class _ZeroDeltaPredictor:
     def __init__(self, *, device: torch.device) -> None:
         self.device = device
@@ -1156,6 +1311,7 @@ def _selected_prediction_names(
         "fe_kalman",
         "fe_window_ls",
         "neuralfly_rls",
+        "maml_online",
         "linear_rls",
         "fe_sgd",
         "static_node",
@@ -1172,6 +1328,8 @@ def _plot_kwargs(name: str) -> dict[str, object]:
         return {"linewidth": 1.0, "alpha": 0.7, "linestyle": ":"}
     if name == "static_node":
         return {"linewidth": 1.1, "alpha": 0.8, "linestyle": "-."}
+    if name == "maml_online":
+        return {"linewidth": 1.1, "alpha": 0.85, "linestyle": "--"}
     if name in {"fe_sgd", "fe_window_ls"}:
         return {"linewidth": 1.0, "alpha": 0.85}
     return {"linewidth": 1.2}
