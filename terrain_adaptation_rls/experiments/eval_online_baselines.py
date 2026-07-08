@@ -78,6 +78,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable the constant feature in the no-training linear baseline.",
     )
     parser.add_argument(
+        "--include-prior-baselines",
+        action="store_true",
+        help="Add train-split prior static/RLS variants for learned-basis methods.",
+    )
+    parser.add_argument(
+        "--prior-points-per-scene",
+        type=int,
+        default=None,
+        help="Training-scene points per scene used to solve prior coefficients.",
+    )
+    parser.add_argument(
+        "--prior-ridge",
+        type=float,
+        default=1e-6,
+        help="Ridge penalty for train-split prior coefficient solves.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate artifact directories and arguments without creating artifacts.",
@@ -139,6 +156,9 @@ def main(argv: list[str] | None = None) -> int:
             "maml_inner_learning_rate": args.maml_inner_learning_rate,
             "maml_inner_steps": args.maml_inner_steps,
             "linear_include_bias": not args.linear_no_bias,
+            "include_prior_baselines": args.include_prior_baselines,
+            "prior_points_per_scene": args.prior_points_per_scene,
+            "prior_ridge": args.prior_ridge,
         },
     )
 
@@ -170,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
         maml_inner_learning_rate=args.maml_inner_learning_rate,
         maml_inner_steps=args.maml_inner_steps,
         linear_include_bias=not args.linear_no_bias,
+        include_prior_baselines=args.include_prior_baselines,
+        prior_points_per_scene=args.prior_points_per_scene,
+        prior_ridge=args.prior_ridge,
     )
     print(run_dir)
     return 0

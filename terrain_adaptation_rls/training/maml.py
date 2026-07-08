@@ -11,6 +11,10 @@ import torch
 from terrain_adaptation_rls.configuration import ExperimentConfig
 from terrain_adaptation_rls.data.load_data import PhoenixDataset, load_scenes
 from terrain_adaptation_rls.models.maml import create_model, loss_fn as maml_loss_fn
+from terrain_adaptation_rls.training.optimization import (
+    build_optimizer,
+    configure_step_learning_rate,
+)
 from terrain_adaptation_rls.training.supervised import (
     scene_supervised_batch,
     scene_trajectory_batch,
@@ -50,6 +54,11 @@ def run_maml_training(
 
     training = config.training
     learning_rate = float(training.get("learning_rate", 1e-3))
+    optimizer_name = str(training.get("optimizer", "adam"))
+    weight_decay = float(training.get("weight_decay", 0.0))
+    lr_schedule = str(training.get("lr_schedule", training.get("scheduler", "none")))
+    warmup_steps = int(training.get("warmup_steps", 0))
+    final_lr_fraction = float(training.get("final_lr_fraction", 0.1))
     configured_steps = int(training.get("steps", 1))
     steps = configured_steps if max_steps is None else min(configured_steps, max_steps)
     batch_size = int(training.get("batch_size", 2))
@@ -105,13 +114,28 @@ def run_maml_training(
         for scene, (inputs, targets) in validation_data.items()
     }
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = build_optimizer(
+        model,
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
     train_losses: list[float] = []
+    learning_rates: list[float] = []
     validation_losses: list[dict[str, float | int | str]] = []
     latest_validation_losses: dict[str, float] = {}
 
     for step in range(1, steps + 1):
         batch = tuple(tensor.to(device) for tensor in next(train_iter))
+        current_lr = configure_step_learning_rate(
+            optimizer,
+            step=step,
+            total_steps=steps,
+            base_learning_rate=learning_rate,
+            schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+        )
         train_loss = meta_update_step(
             model=model,
             batch=batch,
@@ -123,6 +147,7 @@ def run_maml_training(
             gradient_clip_norm=gradient_clip_norm,
         )
         train_losses.append(train_loss)
+        learning_rates.append(current_lr)
 
         if validation_batches and (step == steps or step % eval_interval == 0):
             model.eval()
@@ -168,6 +193,11 @@ def run_maml_training(
         "n_basis": n_basis,
         "hidden_size": hidden_size,
         "learning_rate": learning_rate,
+        "optimizer": optimizer_name,
+        "weight_decay": weight_decay,
+        "lr_schedule": lr_schedule,
+        "warmup_steps": warmup_steps,
+        "final_lr_fraction": final_lr_fraction,
         "inner_learning_rate": inner_lr,
         "inner_steps": inner_steps,
         "eval_interval": eval_interval,
@@ -176,6 +206,7 @@ def run_maml_training(
         "trajectory_query_start_index": trajectory_query_start_index,
         "trajectory_example_policy": trajectory_example_policy,
         "train_losses": train_losses,
+        "learning_rates": learning_rates,
         "validation_losses": validation_losses,
         "final_train_loss": train_losses[-1] if train_losses else None,
         "final_validation_loss": validation_losses[-1]["loss"] if validation_losses else None,

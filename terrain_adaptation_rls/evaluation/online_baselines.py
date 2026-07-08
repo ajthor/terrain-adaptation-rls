@@ -41,13 +41,18 @@ from terrain_adaptation_rls.training.maml import adapt_model, load_trained_maml
 
 METHOD_LABELS = {
     "fe_rls": "FE-RLS",
+    "fe_prior_static": "FE prior-static",
+    "fe_prior_rls": "FE prior-RLS",
     "fe_kalman": "FE-Kalman",
     "fe_sgd": "FE-SGD",
     "fe_window_ls": "FE-window LS",
     "offline_fe": "offline FE",
     "neuralfly_rls": "NeuralFly-style RLS",
+    "neuralfly_prior_static": "NeuralFly prior-static",
+    "neuralfly_prior_rls": "NeuralFly prior-RLS",
     "offline_neuralfly": "offline NeuralFly-style",
     "static_node": "static NODE",
+    "maml_static": "MAML-static",
     "maml_online": "MAML-online",
     "linear_rls": "linear RLS",
     "offline_linear": "offline linear",
@@ -86,6 +91,9 @@ def run_online_baseline_comparison(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    include_prior_baselines: bool = False,
+    prior_points_per_scene: int | None = None,
+    prior_ridge: float = 1e-6,
     maml_inner_learning_rate: float | None = None,
     maml_inner_steps: int | None = None,
     include_recursive_k_step: bool = True,
@@ -133,15 +141,72 @@ def run_online_baseline_comparison(
     resolved_maml_inner_steps: int | None = None
 
     fe_model = load_trained_function_encoder(fe_config, fe_run_dir, device=device)
+    fe_provider = FunctionEncoderBasisProvider(fe_model)
     fe_coefficients, _ = fe_model.compute_coefficients((example_xs, example_dt), example_ys)
     predictions["offline_fe"] = fe_model((xs, dt), coefficients=fe_coefficients).detach().cpu()
     recursive_predictors["offline_fe"] = _FixedCoefficientPredictor(
-        FunctionEncoderBasisProvider(fe_model),
+        fe_provider,
         fe_coefficients.detach(),
     )
 
+    prior_xs: torch.Tensor | None = None
+    prior_dt: torch.Tensor | None = None
+    prior_ys: torch.Tensor | None = None
+    resolved_prior_points = (
+        int(prior_points_per_scene)
+        if prior_points_per_scene is not None
+        else int(fe_config.training.get("n_example_points", 128))
+    )
+    if include_prior_baselines:
+        prior_xs, prior_dt, prior_ys = _training_prior_examples(
+            fe_config,
+            device=device,
+            points_per_scene=resolved_prior_points,
+        )
+        fe_prior_coefficients = _solve_prior_coefficients(
+            fe_provider,
+            xs=prior_xs,
+            dt=prior_dt,
+            ys=prior_ys,
+            ridge=prior_ridge,
+        )
+        predictions["fe_prior_static"] = _predict_with_coefficients(
+            fe_provider,
+            xs=xs,
+            dt=dt,
+            coefficients=fe_prior_coefficients,
+        ).detach().cpu()
+        recursive_predictors["fe_prior_static"] = _FixedCoefficientPredictor(
+            fe_provider,
+            fe_prior_coefficients.detach(),
+        )
+        fe_prior_method = TorchCoefficientMethod(
+            fe_provider,
+            update_rule="rls",
+            forgetting_factor=forgetting_factor,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            initial_coefficients=fe_prior_coefficients.detach(),
+            device=device,
+        )
+        predictions["fe_prior_rls"], coefficient_histories["fe_prior_rls"] = (
+            stream_runtime_method(
+                fe_prior_method,
+                xs=xs,
+                dt=dt,
+                target=target,
+                time=time,
+            )
+        )
+        recursive_predictors["fe_prior_rls"] = _HistoryCoefficientPredictor(
+            fe_provider,
+            coefficient_histories["fe_prior_rls"],
+            initial_coefficients=fe_prior_coefficients.detach(),
+            device=device,
+        )
+
     fe_method = TorchCoefficientMethod(
-        FunctionEncoderBasisProvider(fe_model),
+        fe_provider,
         update_rule="rls",
         forgetting_factor=forgetting_factor,
         initial_covariance=initial_covariance,
@@ -156,13 +221,12 @@ def run_online_baseline_comparison(
         time=time,
     )
     recursive_predictors["fe_rls"] = _HistoryCoefficientPredictor(
-        FunctionEncoderBasisProvider(fe_model),
+        fe_provider,
         coefficient_histories["fe_rls"],
         device=device,
     )
 
     if include_fe_variants:
-        fe_provider = FunctionEncoderBasisProvider(fe_model)
         fe_variant_methods = {
             "fe_kalman": TorchCoefficientMethod(
                 fe_provider,
@@ -228,6 +292,56 @@ def run_online_baseline_comparison(
             neuralfly_model,
             neuralfly_coefficients.detach(),
         )
+        if include_prior_baselines:
+            if prior_xs is None or prior_dt is None or prior_ys is None:
+                prior_xs, prior_dt, prior_ys = _training_prior_examples(
+                    fe_config,
+                    device=device,
+                    points_per_scene=resolved_prior_points,
+                )
+            neuralfly_prior_coefficients = _solve_prior_coefficients(
+                neuralfly_model,
+                xs=prior_xs,
+                dt=prior_dt,
+                ys=prior_ys,
+                ridge=ridge,
+            )
+            predictions["neuralfly_prior_static"] = _predict_with_coefficients(
+                neuralfly_model,
+                xs=xs,
+                dt=dt,
+                coefficients=neuralfly_prior_coefficients,
+            ).detach().cpu()
+            recursive_predictors["neuralfly_prior_static"] = _FixedCoefficientPredictor(
+                neuralfly_model,
+                neuralfly_prior_coefficients.detach(),
+            )
+            neuralfly_prior_method = TorchCoefficientMethod(
+                neuralfly_model,
+                update_rule="rls",
+                output_dim=6,
+                forgetting_factor=forgetting_factor,
+                initial_covariance=initial_covariance,
+                measurement_noise=measurement_noise,
+                initial_coefficients=neuralfly_prior_coefficients.detach(),
+                device=device,
+            )
+            (
+                predictions["neuralfly_prior_rls"],
+                coefficient_histories["neuralfly_prior_rls"],
+            ) = stream_runtime_method(
+                neuralfly_prior_method,
+                xs=xs,
+                dt=dt,
+                target=target,
+                time=time,
+            )
+            recursive_predictors["neuralfly_prior_rls"] = _HistoryCoefficientPredictor(
+                neuralfly_model,
+                coefficient_histories["neuralfly_prior_rls"],
+                initial_coefficients=neuralfly_prior_coefficients.detach(),
+                device=device,
+            )
         neuralfly_method = TorchCoefficientMethod(
             neuralfly_model,
             update_rule="rls",
@@ -279,6 +393,8 @@ def run_online_baseline_comparison(
         )
         resolved_maml_inner_lr = maml_inner_lr
         resolved_maml_inner_steps = maml_steps
+        predictions["maml_static"] = maml_model((xs, dt)).detach().cpu()
+        recursive_predictors["maml_static"] = _DirectModelPredictor(maml_model)
         predictions["maml_online"] = stream_maml_online(
             maml_model,
             xs=xs,
@@ -379,6 +495,9 @@ def run_online_baseline_comparison(
         fe_window_size=fe_window_size,
         fe_window_ridge=fe_window_ridge,
         linear_include_bias=linear_include_bias,
+        include_prior_baselines=include_prior_baselines,
+        prior_points_per_scene=resolved_prior_points,
+        prior_ridge=prior_ridge,
         maml_inner_learning_rate=resolved_maml_inner_lr,
         maml_inner_steps=resolved_maml_inner_steps,
         include_recursive_k_step=include_recursive_k_step,
@@ -415,6 +534,83 @@ def load_trained_neural_ode(
     model.load_state_dict(state)
     model.eval()
     return model
+
+
+@torch.no_grad()
+def _training_prior_examples(
+    config: object,
+    *,
+    device: torch.device,
+    points_per_scene: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Sample deterministic prior-solve examples from the training scenes."""
+
+    platform = getattr(config, "platform", None)
+    if platform is None:
+        raise ValueError("Prior coefficient solve requires config.platform")
+    train_scenes = [str(scene) for scene in config.data.get("train_scenes", ())]
+    if not train_scenes:
+        raise ValueError("Prior coefficient solve requires data.train_scenes")
+    if points_per_scene <= 0:
+        raise ValueError("prior_points_per_scene must be positive")
+
+    loaded = load_scenes(train_scenes, platform)
+    xs_chunks: list[torch.Tensor] = []
+    dt_chunks: list[torch.Tensor] = []
+    ys_chunks: list[torch.Tensor] = []
+    base_seed = int(getattr(config, "seed", 0))
+    for scene_index, scene in enumerate(train_scenes):
+        inputs, targets = loaded[scene]
+        if inputs.shape[0] != targets.shape[0]:
+            raise ValueError(f"{scene} inputs and targets have different row counts")
+        n_points = min(points_per_scene, int(inputs.shape[0]))
+        generator = torch.Generator(device="cpu").manual_seed(
+            base_seed + 104_729 * (scene_index + 1)
+        )
+        indices = torch.randperm(inputs.shape[0], generator=generator)[:n_points]
+        selected_inputs = inputs[indices]
+        selected_targets = targets[indices]
+        xs = selected_inputs[:, 1:]
+        dt = selected_targets[:, 0] - selected_inputs[:, 0]
+        ys = selected_targets[:, 1:] - xs[:, :6]
+        xs_chunks.append(xs)
+        dt_chunks.append(dt)
+        ys_chunks.append(ys)
+
+    return (
+        torch.cat(xs_chunks, dim=0).unsqueeze(0).to(device),
+        torch.cat(dt_chunks, dim=0).unsqueeze(0).to(device),
+        torch.cat(ys_chunks, dim=0).unsqueeze(0).to(device),
+    )
+
+
+@torch.no_grad()
+def _solve_prior_coefficients(
+    feature_provider: object,
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    ys: torch.Tensor,
+    ridge: float,
+) -> torch.Tensor:
+    """Solve one global coefficient vector for a learned basis."""
+
+    features = feature_provider(RuntimeInput(xs, dt))
+    return solve_ridge_coefficients(features, ys, ridge=ridge)
+
+
+@torch.no_grad()
+def _predict_with_coefficients(
+    feature_provider: object,
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    coefficients: torch.Tensor,
+) -> torch.Tensor:
+    """Predict deltas for a coefficient-linear runtime model."""
+
+    features = feature_provider(RuntimeInput(xs, dt))
+    return linear_predict(features, coefficients)
 
 
 @torch.no_grad()
@@ -623,6 +819,9 @@ def summarize_baseline_predictions(
     fe_window_size: int = 100,
     fe_window_ridge: float = 1e-6,
     linear_include_bias: bool = True,
+    include_prior_baselines: bool = False,
+    prior_points_per_scene: int = 128,
+    prior_ridge: float = 1e-6,
     maml_inner_learning_rate: float | None = None,
     maml_inner_steps: int | None = None,
     include_recursive_k_step: bool = True,
@@ -711,6 +910,12 @@ def summarize_baseline_predictions(
         },
         "linear_baseline": {
             "include_bias": linear_include_bias,
+        },
+        "prior_baselines": {
+            "include": include_prior_baselines,
+            "points_per_scene": prior_points_per_scene,
+            "ridge": prior_ridge,
+            "source": "training_scenes",
         },
         "maml_parameters": {
             "inner_learning_rate": maml_inner_learning_rate,
@@ -1138,10 +1343,12 @@ class _HistoryCoefficientPredictor:
         feature_provider: object,
         history: torch.Tensor,
         *,
+        initial_coefficients: torch.Tensor | None = None,
         device: torch.device,
     ) -> None:
         self.feature_provider = feature_provider
         self.history = history
+        self.initial_coefficients = initial_coefficients
         self.device = device
 
     def predict(
@@ -1163,6 +1370,11 @@ class _HistoryCoefficientPredictor:
 
     def _coefficients_for_start(self, start_index: int) -> torch.Tensor:
         if start_index <= 0:
+            if self.initial_coefficients is not None:
+                coefficients = self.initial_coefficients.to(self.device)
+                if coefficients.ndim == 1:
+                    coefficients = coefficients.unsqueeze(0)
+                return coefficients
             return torch.zeros(
                 1,
                 self.history.shape[-1],
@@ -1341,9 +1553,14 @@ def _selected_prediction_names(
 ) -> list[str]:
     order = [
         "fe_rls",
+        "fe_prior_rls",
+        "fe_prior_static",
         "fe_kalman",
         "fe_window_ls",
         "neuralfly_rls",
+        "neuralfly_prior_rls",
+        "neuralfly_prior_static",
+        "maml_static",
         "maml_online",
         "linear_rls",
         "fe_sgd",
@@ -1363,6 +1580,10 @@ def _plot_kwargs(name: str) -> dict[str, object]:
         return {"linewidth": 1.1, "alpha": 0.8, "linestyle": "-."}
     if name == "maml_online":
         return {"linewidth": 1.1, "alpha": 0.85, "linestyle": "--"}
+    if name == "maml_static":
+        return {"linewidth": 1.0, "alpha": 0.75, "linestyle": ":"}
+    if "prior" in name:
+        return {"linewidth": 1.2, "alpha": 0.9, "linestyle": "-."}
     if name in {"fe_sgd", "fe_window_ls"}:
         return {"linewidth": 1.0, "alpha": 0.85}
     return {"linewidth": 1.2}
