@@ -480,6 +480,30 @@ def load_all_sim_scenes():
     return data
 
 
+def scene_csv_paths(platform: str, terrain: str) -> tuple[str, str]:
+    """Return odom/cmd CSV paths for a scene.
+
+    ``small_ugv`` is a logical combined hardware platform. Its scene names are
+    namespaced by the source robot, for example ``jackal_0770/grass`` or
+    ``bluebonnet/ice1``.
+    """
+
+    if platform == "small_ugv":
+        parts = str(terrain).split("/", maxsplit=1)
+        if len(parts) != 2 or parts[0] not in {"jackal_0770", "bluebonnet"}:
+            raise ValueError(
+                "small_ugv scenes must be namespaced as "
+                "'jackal_0770/<scene>' or 'bluebonnet/<scene>'; "
+                f"got {terrain!r}"
+            )
+        platform_dir, scene_dir = parts
+    else:
+        platform_dir = platform
+        scene_dir = str(terrain)
+    base = f"terrain_adaptation_rls/data/{platform_dir}/{scene_dir}"
+    return f"{base}/odom.csv", f"{base}/cmd_vel.csv"
+
+
 def load_scenes(scenes: List[int], platform: str):
     """
     Loads and processes odom and cmd_vel data from a list of scenes.
@@ -488,8 +512,9 @@ def load_scenes(scenes: List[int], platform: str):
 
     data = {}
     for terrain in scenes:
-        odom = load_csv(f"terrain_adaptation_rls/data/{platform}/{terrain}/odom.csv")
-        cmd_vel = load_csv(f"terrain_adaptation_rls/data/{platform}/{terrain}/cmd_vel.csv")
+        odom_path, cmd_vel_path = scene_csv_paths(platform, str(terrain))
+        odom = load_csv(odom_path)
+        cmd_vel = load_csv(cmd_vel_path)
         inputs, targets = process_data(odom, cmd_vel)
         data[f"{terrain}"] = (inputs, targets)
     # plot_target_data(data)
