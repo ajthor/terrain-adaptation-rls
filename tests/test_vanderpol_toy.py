@@ -13,6 +13,11 @@ try:
         run_vanderpol_toy_evaluation,
         write_seed_sweep_summary,
     )
+    from terrain_adaptation_rls.evaluation.vdp_weak_fe import (
+        VectorFieldBasis,
+        run_vdp_weak_fe_experiment,
+        weak_system,
+    )
     from terrain_adaptation_rls.methods.runtime import RuntimeInput
 except ModuleNotFoundError:
     torch = None
@@ -81,6 +86,47 @@ class VanDerPolToyTests(unittest.TestCase):
             self.assertTrue((artifact_dir / "seed_method_summary.csv").exists())
             self.assertTrue((artifact_dir / "aggregate_method_summary.csv").exists())
             self.assertTrue((artifact_dir / "aggregate_metric_summary.png").exists())
+
+    def test_standalone_weak_system_shapes(self):
+        x = torch.zeros(2, 20, 2)
+        basis = torch.ones(2, 20, 2, 3)
+
+        design, target = weak_system(
+            x,
+            basis,
+            dt=0.05,
+            starts=(0, 4),
+            window=9,
+            powers=(4, 6),
+        )
+
+        self.assertEqual(tuple(design.shape), (2, 8, 3))
+        self.assertEqual(tuple(target.shape), (2, 8))
+
+    def test_runs_tiny_standalone_weak_experiment(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            summary = run_vdp_weak_fe_experiment(
+                artifact_dir=tmpdir,
+                epochs=1,
+                steps=50,
+                rollout_steps=20,
+                batch_size=2,
+                hidden_size=8,
+                n_basis=2,
+                window=11,
+                example_starts=(0, 5),
+                query_starts=(15, 25),
+                eval_example_starts=(0, 5),
+                eval_mus=(1.0,),
+                write_plots=False,
+            )
+
+            artifact_dir = Path(tmpdir)
+            self.assertEqual(summary["epochs"], 1)
+            self.assertTrue((artifact_dir / "summary.json").exists())
+            self.assertTrue((artifact_dir / "rollout_summary.csv").exists())
+            self.assertTrue((artifact_dir / "weak_fe_model.pth").exists())
+            self.assertFalse((artifact_dir / "vdp_weak_fe_rollouts.png").exists())
 
 
 if __name__ == "__main__":
