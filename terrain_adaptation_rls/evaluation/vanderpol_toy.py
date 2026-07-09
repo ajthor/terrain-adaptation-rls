@@ -15,6 +15,8 @@ import torch
 from terrain_adaptation_rls.estimators.linear import linear_predict
 from terrain_adaptation_rls.estimators.linear import solve_ridge_coefficients
 from terrain_adaptation_rls.methods.runtime import Observation, RuntimeInput, TorchCoefficientMethod
+from terrain_adaptation_rls.training.weak_form import solve_weak_coefficients
+from terrain_adaptation_rls.training.weak_form import weak_system_from_basis
 
 
 @dataclass(frozen=True)
@@ -164,6 +166,13 @@ def run_vanderpol_toy_evaluation(
     coefficient_window_ridge: float = 1e-6,
     maml_inner_learning_rate: float = 1e-2,
     maml_inner_steps: int = 1,
+    weak_fe_ode: bool = False,
+    weak_weight: float = 0.01,
+    weak_start_step: int = 1000,
+    weak_ramp_steps: int = 500,
+    weak_window_points: int = 128,
+    weak_test_functions: int = 16,
+    weak_ridge: float = 1e-4,
     write_diagnostics: bool = True,
 ) -> ToyEvaluationResult:
     """Train toy bases and evaluate zero-coefficient RLS on held-out VDP tasks."""
@@ -240,6 +249,14 @@ def run_vanderpol_toy_evaluation(
             restore_best=restore_best,
             seed=seed + index,
             device=device,
+            weak_enabled=bool(weak_fe_ode and isinstance(model, FEODEBasis)),
+            weak_weight=weak_weight,
+            weak_start_step=weak_start_step,
+            weak_ramp_steps=weak_ramp_steps,
+            weak_window_points=weak_window_points,
+            weak_test_functions=weak_test_functions,
+            weak_ridge=weak_ridge,
+            trajectory_steps=train_trajectory_steps,
         )
         for index, (name, model) in enumerate(basis_models.items())
     }
@@ -544,6 +561,13 @@ def run_vanderpol_toy_evaluation(
         "coefficient_window_ridge": coefficient_window_ridge,
         "maml_inner_learning_rate": maml_inner_learning_rate,
         "maml_inner_steps": maml_inner_steps,
+        "weak_fe_ode": weak_fe_ode,
+        "weak_weight": weak_weight,
+        "weak_start_step": weak_start_step,
+        "weak_ramp_steps": weak_ramp_steps,
+        "weak_window_points": weak_window_points,
+        "weak_test_functions": weak_test_functions,
+        "weak_ridge": weak_ridge,
         "write_diagnostics": write_diagnostics,
         "train_histories": train_histories,
         "scenarios": scenarios,
@@ -576,6 +600,14 @@ def train_toy_basis(
     restore_best: bool,
     seed: int,
     device: torch.device,
+    weak_enabled: bool = False,
+    weak_weight: float = 0.01,
+    weak_start_step: int = 1000,
+    weak_ramp_steps: int = 500,
+    weak_window_points: int = 128,
+    weak_test_functions: int = 16,
+    weak_ridge: float = 1e-4,
+    trajectory_steps: int = 160,
 ) -> dict[str, object]:
     optimizer = build_optimizer(
         model,
@@ -586,6 +618,8 @@ def train_toy_basis(
     generator = torch.Generator(device=device).manual_seed(seed)
     validation_generator = torch.Generator(device=device).manual_seed(seed + 50_000)
     losses: list[float] = []
+    pointwise_losses: list[float] = []
+    weak_losses: list[float] = []
     learning_rates: list[float] = []
     validation_steps: list[int] = []
     validation_losses: list[float] = []
@@ -613,12 +647,41 @@ def train_toy_basis(
         )
         optimizer.zero_grad(set_to_none=True)
         prediction = predict_with_solved_coefficients(model, batch, ridge=ridge)
-        loss = torch.nn.functional.mse_loss(prediction, batch["query_y"])
+        pointwise_loss = torch.nn.functional.mse_loss(prediction, batch["query_y"])
+        weak_loss = None
+        current_weak_weight = 0.0
+        if weak_enabled and step >= weak_start_step:
+            current_weak_weight = scheduled_weak_weight(
+                weak_weight,
+                step=step,
+                start_step=weak_start_step,
+                ramp_steps=weak_ramp_steps,
+            )
+            weak_batch = sample_weak_task_batch(
+                train_data,
+                batch_size=batch_size,
+                window_points=weak_window_points,
+                trajectory_steps=trajectory_steps,
+                generator=generator,
+                device=device,
+            )
+            weak_loss = weak_toy_fe_ode_loss(
+                model,
+                weak_batch,
+                n_tests=weak_test_functions,
+                ridge=weak_ridge,
+            )
+            loss = pointwise_loss + current_weak_weight * weak_loss
+        else:
+            loss = pointwise_loss
         loss.backward()
         if gradient_clip > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
         optimizer.step()
         losses.append(float(loss.detach().cpu()))
+        pointwise_losses.append(float(pointwise_loss.detach().cpu()))
+        if weak_loss is not None:
+            weak_losses.append(float(weak_loss.detach().cpu()))
         learning_rates.append(current_lr)
 
         if should_validate(step, steps=steps, validation_interval=validation_interval):
@@ -645,6 +708,8 @@ def train_toy_basis(
     return {
         "final_loss": losses[-1] if losses else None,
         "losses": losses,
+        "pointwise_losses": pointwise_losses,
+        "weak_losses": weak_losses,
         "learning_rates": learning_rates,
         "validation_steps": validation_steps,
         "validation_losses": validation_losses,
@@ -659,6 +724,13 @@ def train_toy_basis(
         "lr_schedule": lr_schedule,
         "warmup_steps": warmup_steps,
         "final_lr_fraction": final_lr_fraction,
+        "weak_enabled": weak_enabled,
+        "weak_weight": weak_weight,
+        "weak_start_step": weak_start_step,
+        "weak_ramp_steps": weak_ramp_steps,
+        "weak_window_points": weak_window_points,
+        "weak_test_functions": weak_test_functions,
+        "weak_ridge": weak_ridge,
     }
 
 
@@ -676,6 +748,61 @@ def predict_with_solved_coefficients(
     )
     query_features = model(RuntimeInput(batch["query_x"], batch["query_dt"]))
     return linear_predict(query_features, coefficients)
+
+
+def weak_toy_fe_ode_loss(
+    model: torch.nn.Module,
+    batch: dict[str, torch.Tensor],
+    *,
+    n_tests: int,
+    ridge: float,
+) -> torch.Tensor:
+    """Weak residual loss for the toy FE-ODE basis."""
+
+    if not isinstance(model, FEODEBasis):
+        raise TypeError("weak_toy_fe_ode_loss requires an FEODEBasis model")
+    context_basis = evaluate_toy_raw_vector_field_basis(model, batch["context_x"])
+    query_basis = evaluate_toy_raw_vector_field_basis(model, batch["query_x"])
+    context_weak_basis, context_weak_target = weak_system_from_basis(
+        batch["context_x"],
+        context_basis,
+        batch["context_dt"],
+        n_tests=n_tests,
+    )
+    coefficients = solve_weak_coefficients(
+        context_weak_basis,
+        context_weak_target,
+        ridge=ridge,
+    )
+    query_weak_basis, query_weak_target = weak_system_from_basis(
+        batch["query_x"],
+        query_basis,
+        batch["query_dt"],
+        n_tests=n_tests,
+    )
+    weak_prediction = torch.einsum("bmdk,bk->bmd", query_weak_basis, coefficients)
+    return torch.nn.functional.mse_loss(weak_prediction, query_weak_target)
+
+
+def evaluate_toy_raw_vector_field_basis(
+    model: FEODEBasis,
+    xs: torch.Tensor,
+) -> torch.Tensor:
+    values = [field(xs) for field in model.vector_fields]
+    return torch.stack(values, dim=-1)
+
+
+def scheduled_weak_weight(
+    weak_weight: float,
+    *,
+    step: int,
+    start_step: int,
+    ramp_steps: int,
+) -> float:
+    if ramp_steps <= 0:
+        return weak_weight
+    ramp_position = min(max(step - start_step + 1, 0), ramp_steps)
+    return weak_weight * ramp_position / ramp_steps
 
 
 @torch.no_grad()
@@ -1651,6 +1778,81 @@ def sample_task_batch(
         "query_dt": torch.stack(query_dt),
         "query_y": torch.stack(query_y),
     }
+
+
+def sample_weak_task_batch(
+    train_data: dict[float, VanDerPolTaskData],
+    *,
+    batch_size: int,
+    window_points: int,
+    trajectory_steps: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    """Sample context/query trajectory windows without crossing rollout boundaries."""
+
+    if window_points <= 1:
+        raise ValueError("weak window must contain at least two points")
+    if trajectory_steps < window_points:
+        raise ValueError("trajectory_steps must be at least weak window_points")
+
+    tasks = list(train_data.values())
+    context_xs: list[torch.Tensor] = []
+    context_dt: list[torch.Tensor] = []
+    query_xs: list[torch.Tensor] = []
+    query_dt: list[torch.Tensor] = []
+    for _ in range(batch_size):
+        task_index = int(torch.randint(len(tasks), (1,), generator=generator, device=device))
+        task = tasks[task_index]
+        context_slice = sample_task_window_slice(
+            task,
+            trajectory_steps=trajectory_steps,
+            window_points=window_points,
+            generator=generator,
+            device=device,
+        )
+        query_slice = sample_task_window_slice(
+            task,
+            trajectory_steps=trajectory_steps,
+            window_points=window_points,
+            generator=generator,
+            device=device,
+        )
+        context_xs.append(task.xs[context_slice])
+        context_dt.append(task.dt[context_slice])
+        query_xs.append(task.xs[query_slice])
+        query_dt.append(task.dt[query_slice])
+
+    return {
+        "context_x": torch.stack(context_xs),
+        "context_dt": torch.stack(context_dt),
+        "query_x": torch.stack(query_xs),
+        "query_dt": torch.stack(query_dt),
+    }
+
+
+def sample_task_window_slice(
+    task: VanDerPolTaskData,
+    *,
+    trajectory_steps: int,
+    window_points: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> slice:
+    n_trajectories = task.xs.shape[0] // trajectory_steps
+    if n_trajectories <= 0:
+        raise ValueError("task does not contain a full trajectory")
+    trajectory_index = int(torch.randint(n_trajectories, (1,), generator=generator, device=device))
+    offset = int(
+        torch.randint(
+            trajectory_steps - window_points + 1,
+            (1,),
+            generator=generator,
+            device=device,
+        )
+    )
+    start = trajectory_index * trajectory_steps + offset
+    return slice(start, start + window_points)
 
 
 def write_rows_csv(path: Path, rows: list[dict[str, object]]) -> None:

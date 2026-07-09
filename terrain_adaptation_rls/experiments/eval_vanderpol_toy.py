@@ -69,6 +69,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--maml-inner-learning-rate", type=float, default=1e-2)
     parser.add_argument("--maml-inner-steps", type=int, default=1)
     parser.add_argument(
+        "--weak-fe-ode",
+        action="store_true",
+        help="Train the FE-ODE toy basis with an additional scheduled weak-form penalty.",
+    )
+    parser.add_argument("--weak-weight", type=float, default=0.01)
+    parser.add_argument("--weak-start-step", type=int, default=1000)
+    parser.add_argument("--weak-ramp-steps", type=int, default=500)
+    parser.add_argument("--weak-window-points", type=int, default=128)
+    parser.add_argument("--weak-test-functions", type=int, default=16)
+    parser.add_argument("--weak-ridge", type=float, default=1e-4)
+    parser.add_argument(
         "--diagnostics-mode",
         choices=("all", "first", "none"),
         default="all",
@@ -143,6 +154,13 @@ def main(argv: list[str] | None = None) -> int:
             "coefficient_window_ridge": args.coefficient_window_ridge,
             "maml_inner_learning_rate": args.maml_inner_learning_rate,
             "maml_inner_steps": args.maml_inner_steps,
+            "weak_fe_ode": args.weak_fe_ode,
+            "weak_weight": args.weak_weight,
+            "weak_start_step": args.weak_start_step,
+            "weak_ramp_steps": args.weak_ramp_steps,
+            "weak_window_points": args.weak_window_points,
+            "weak_test_functions": args.weak_test_functions,
+            "weak_ridge": args.weak_ridge,
             "diagnostics_mode": args.diagnostics_mode,
         },
     )
@@ -193,6 +211,13 @@ def main(argv: list[str] | None = None) -> int:
                 "coefficient_window_ridge": args.coefficient_window_ridge,
                 "maml_inner_learning_rate": args.maml_inner_learning_rate,
                 "maml_inner_steps": args.maml_inner_steps,
+                "weak_fe_ode": args.weak_fe_ode,
+                "weak_weight": args.weak_weight,
+                "weak_start_step": args.weak_start_step,
+                "weak_ramp_steps": args.weak_ramp_steps,
+                "weak_window_points": args.weak_window_points,
+                "weak_test_functions": args.weak_test_functions,
+                "weak_ridge": args.weak_ridge,
                 "write_diagnostics": write_diagnostics,
             }
         )
