@@ -1,0 +1,63 @@
+{
+  "name": "small_ugv_maml_paper_real",
+  "kind": "train",
+  "platform": "small_ugv",
+  "methods": [
+    "maml_online"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "jackal_0770/grass",
+      "jackal_0770/gym_floor",
+      "jackal_0770/ice",
+      "jackal_0770/mulch",
+      "jackal_0770/pavement",
+      "jackal_0770/turf",
+      "bluebonnet/grass",
+      "bluebonnet/gravel",
+      "bluebonnet/gym_floor",
+      "bluebonnet/gym_floor_simple",
+      "bluebonnet/ice1",
+      "bluebonnet/ice2",
+      "bluebonnet/ice4",
+      "bluebonnet/ice5",
+      "bluebonnet/mulch"
+    ],
+    "validation_scenes": [
+      "jackal_0770/short_bags/gym_floor"
+    ],
+    "test_scenes": [
+      "jackal_0770/ice_autonomy_11",
+      "jackal_0770/short_bags/ice"
+    ],
+    "split_policy": "paper_replication_ice_seen"
+  },
+  "model": {
+    "family": "maml_neural_ode",
+    "n_basis": 16,
+    "hidden_size": 192
+  },
+  "training": {
+    "steps": 20000,
+    "batch_size": 4,
+    "learning_rate": 0.0005,
+    "optimizer": "adamw",
+    "weight_decay": 0.00001,
+    "lr_schedule": "cosine",
+    "warmup_steps": 750,
+    "final_lr_fraction": 0.05,
+    "gradient_clip_norm": 1.0,
+    "n_points": 256,
+    "n_example_points": 256,
+    "inner_steps": 1,
+    "inner_learning_rate": 0.01,
+    "eval_interval": 500,
+    "log_interval": 250
+  },
+  "evaluation": {
+    "max_eval_points": 1024,
+    "trajectory_query_start_index": 256,
+    "trajectory_example_policy": "random_scene"
+  }
+}
