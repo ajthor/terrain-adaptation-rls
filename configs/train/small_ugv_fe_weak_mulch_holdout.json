@@ -1,0 +1,64 @@
+{
+  "name": "small_ugv_fe_weak_mulch_holdout",
+  "kind": "train",
+  "platform": "small_ugv",
+  "methods": [
+    "fe_static",
+    "fe_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "jackal_0770/grass",
+      "jackal_0770/gym_floor",
+      "jackal_0770/ice",
+      "jackal_0770/pavement",
+      "jackal_0770/turf",
+      "bluebonnet/grass",
+      "bluebonnet/gravel",
+      "bluebonnet/gym_floor",
+      "bluebonnet/gym_floor_simple",
+      "bluebonnet/ice1",
+      "bluebonnet/ice2",
+      "bluebonnet/ice4",
+      "bluebonnet/ice5"
+    ],
+    "validation_scenes": [
+      "jackal_0770/short_bags/grass"
+    ],
+    "test_scenes": [
+      "jackal_0770/mulch",
+      "jackal_0770/short_bags/mulch",
+      "bluebonnet/mulch"
+    ],
+    "split_policy": "terrain_holdout_mulch"
+  },
+  "model": {
+    "family": "function_encoder",
+    "basis_type": "mlp_increment",
+    "n_basis": 16,
+    "hidden_size": 256
+  },
+  "training": {
+    "steps": 20000,
+    "batch_size": 16,
+    "learning_rate": 0.0005,
+    "gradient_clip_norm": 1.0,
+    "weak_dt": 0.1,
+    "weak_window": 41,
+    "weak_powers": [4, 6, 8, 10],
+    "weak_example_starts": [0, 15, 30, 45],
+    "weak_query_starts": [60, 75, 90, 105],
+    "weak_eval_example_starts": [0, 15, 30, 45, 60, 75],
+    "weak_eval_query_start": 128,
+    "weak_ridge": 0.0001,
+    "norm_weight": 0.001,
+    "coeff_weight": 0.00001,
+    "log_interval": 250
+  },
+  "evaluation": {
+    "max_eval_points": 1024,
+    "trajectory_query_start_index": 256,
+    "trajectory_example_policy": "random_scene"
+  }
+}
