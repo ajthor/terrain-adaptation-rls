@@ -113,6 +113,7 @@ class VanDerPolToyTests(unittest.TestCase):
                 batch_size=2,
                 hidden_size=8,
                 n_basis=2,
+                activation="relu",
                 window=11,
                 example_starts=(0, 5),
                 query_starts=(15, 25),
@@ -123,6 +124,7 @@ class VanDerPolToyTests(unittest.TestCase):
 
             artifact_dir = Path(tmpdir)
             self.assertEqual(summary["epochs"], 1)
+            self.assertEqual(summary["activation"], "relu")
             self.assertTrue((artifact_dir / "summary.json").exists())
             self.assertTrue((artifact_dir / "rollout_summary.csv").exists())
             self.assertTrue((artifact_dir / "weak_fe_model.pth").exists())

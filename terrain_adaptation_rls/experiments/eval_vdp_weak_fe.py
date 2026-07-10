@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rollout-steps", type=int, default=300)
     parser.add_argument("--n-basis", type=int, default=4)
     parser.add_argument("--hidden-size", type=int, default=64)
+    parser.add_argument("--activation", choices=("tanh", "relu"), default="tanh")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--ridge", type=float, default=1e-4)
@@ -56,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         "rollout_steps": args.rollout_steps,
         "n_basis": args.n_basis,
         "hidden_size": args.hidden_size,
+        "activation": args.activation,
         "batch_size": args.batch_size,
         "learning_rate": args.learning_rate,
         "ridge": args.ridge,
@@ -74,7 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "valid VDP weak FE experiment: "
             f"epochs={args.epochs}, n_basis={args.n_basis}, "
-            f"window={args.window}, powers={args.powers}"
+            f"activation={args.activation}, window={args.window}, powers={args.powers}"
         )
         return 0
 
@@ -94,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         rollout_steps=args.rollout_steps,
         n_basis=args.n_basis,
         hidden_size=args.hidden_size,
+        activation=args.activation,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         ridge=args.ridge,

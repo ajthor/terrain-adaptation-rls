@@ -10,13 +10,21 @@ import torch
 
 
 class ToyMLP(torch.nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, hidden_size: int) -> None:
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        hidden_size: int,
+        *,
+        activation: str = "tanh",
+    ) -> None:
         super().__init__()
+        activation_module = _activation_module(activation)
         self.network = torch.nn.Sequential(
             torch.nn.Linear(input_dim, hidden_size),
-            torch.nn.Tanh(),
+            activation_module,
             torch.nn.Linear(hidden_size, hidden_size),
-            torch.nn.Tanh(),
+            _activation_module(activation),
             torch.nn.Linear(hidden_size, output_dim),
         )
 
@@ -27,11 +35,11 @@ class ToyMLP(torch.nn.Module):
 class VectorFieldBasis(torch.nn.Module):
     """Independent vector-field basis functions ``g_i(x)``."""
 
-    def __init__(self, *, n_basis: int, hidden_size: int) -> None:
+    def __init__(self, *, n_basis: int, hidden_size: int, activation: str = "tanh") -> None:
         super().__init__()
         self.n_basis = int(n_basis)
         self.basis_functions = torch.nn.ModuleList(
-            [ToyMLP(2, 2, hidden_size) for _ in range(self.n_basis)]
+            [ToyMLP(2, 2, hidden_size, activation=activation) for _ in range(self.n_basis)]
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -51,6 +59,7 @@ def run_vdp_weak_fe_experiment(
     rollout_steps: int = 300,
     n_basis: int = 4,
     hidden_size: int = 64,
+    activation: str = "tanh",
     batch_size: int = 64,
     learning_rate: float = 1e-3,
     ridge: float = 1e-4,
@@ -73,7 +82,7 @@ def run_vdp_weak_fe_experiment(
     dtype = torch.float32
     torch.manual_seed(seed)
 
-    model = VectorFieldBasis(n_basis=n_basis, hidden_size=hidden_size).to(
+    model = VectorFieldBasis(n_basis=n_basis, hidden_size=hidden_size, activation=activation).to(
         device=device,
         dtype=dtype,
     )
@@ -155,6 +164,7 @@ def run_vdp_weak_fe_experiment(
         "rollout_steps": rollout_steps,
         "n_basis": n_basis,
         "hidden_size": hidden_size,
+        "activation": activation,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
         "ridge": ridge,
@@ -180,6 +190,15 @@ def run_vdp_weak_fe_experiment(
         write_training_plot(artifact_path / "training_losses.png", summary)
         write_rollout_plot(artifact_path / "vdp_weak_fe_rollouts.png", eval_rows)
     return summary
+
+
+def _activation_module(name: str) -> torch.nn.Module:
+    normalized = name.lower()
+    if normalized == "tanh":
+        return torch.nn.Tanh()
+    if normalized == "relu":
+        return torch.nn.ReLU()
+    raise ValueError(f"unsupported activation: {name}")
 
 
 def vdp_rhs(x: torch.Tensor, *, mu: torch.Tensor) -> torch.Tensor:
