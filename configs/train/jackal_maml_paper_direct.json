@@ -1,0 +1,49 @@
+{
+  "name": "jackal_maml_paper_direct",
+  "kind": "train",
+  "platform": "jackal_0770",
+  "methods": [
+    "maml_online"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "grass",
+      "gym_floor",
+      "ice",
+      "mulch",
+      "pavement",
+      "turf"
+    ],
+    "validation_scenes": [
+      "short_bags/mulch"
+    ],
+    "test_scenes": [
+      "short_bags/ice",
+      "ice_autonomy_11"
+    ],
+    "split_policy": "legacy_jackal_paper_direct"
+  },
+  "model": {
+    "family": "maml_neural_ode",
+    "n_basis": 8,
+    "hidden_size": 128
+  },
+  "training": {
+    "steps": 10000,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "gradient_clip_norm": 1.0,
+    "n_points": 1000,
+    "n_example_points": 100,
+    "inner_steps": 5,
+    "inner_learning_rate": 0.01,
+    "eval_interval": 250,
+    "log_interval": 250
+  },
+  "evaluation": {
+    "max_eval_points": 1024,
+    "trajectory_query_start_index": 100,
+    "trajectory_example_policy": "random_scene"
+  }
+}
