@@ -13,6 +13,7 @@ try:
         run_vanderpol_toy_evaluation,
         write_seed_sweep_summary,
     )
+    from terrain_adaptation_rls.methods.runtime import ALPaCABasisProvider
     from terrain_adaptation_rls.evaluation.vdp_weak_fe import (
         VectorFieldBasis,
         run_vdp_weak_fe_experiment,
@@ -33,6 +34,12 @@ class VanDerPolToyTests(unittest.TestCase):
             FEODEBasis(n_basis=3, hidden_size=8),
             FEIncrementBasis(n_basis=3, hidden_size=8),
             NeuralFlyToyBasis(n_basis=3, hidden_size=8),
+            ALPaCABasisProvider(
+                input_dim=3,
+                output_dim=2,
+                n_basis=3,
+                hidden_size=8,
+            ),
         ):
             features = model(RuntimeInput(xs, dt))
             self.assertEqual(tuple(features.shape), (2, 5, 2, 3))
@@ -75,6 +82,7 @@ class VanDerPolToyTests(unittest.TestCase):
             self.assertTrue((artifact_dir / "basis_streamplots_fe_ode_rls.png").exists())
             self.assertTrue((artifact_dir / "basis_streamplots_fe_mlp_rls.png").exists())
             self.assertTrue((artifact_dir / "basis_streamplots_neuralfly_rls.png").exists())
+            self.assertTrue((artifact_dir / "basis_streamplots_alpaca_rls.png").exists())
             self.assertTrue((artifact_dir / "interpolation_mu_0.75_component_errors.png").exists())
             self.assertTrue(
                 (artifact_dir / "interpolation_mu_0.75_recursive_horizon_errors.png").exists()

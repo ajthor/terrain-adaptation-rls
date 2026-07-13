@@ -76,6 +76,10 @@ if torch is None:
         def __init__(self, *args: object, **kwargs: object) -> None:
             _missing_torch()
 
+    class ALPaCABasisProvider:  # pragma: no cover
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _missing_torch()
+
     class FunctionEncoderBasisProvider:  # pragma: no cover
         def __init__(self, *args: object, **kwargs: object) -> None:
             _missing_torch()
@@ -232,6 +236,72 @@ else:
             flat_z = z.reshape(-1, self.input_dim)
             flat_features = self.network(flat_z)
             return flat_features.reshape(*z.shape[:-1], self.output_dim, self.n_basis)
+
+    class ALPaCABasisProvider(torch.nn.Module):
+        """ALPaCA feature map and learned Gaussian prior over coefficients."""
+
+        def __init__(
+            self,
+            *,
+            input_dim: int = 9,
+            output_dim: int = 6,
+            n_basis: int = 8,
+            hidden_size: int = 128,
+            n_hidden_layers: int = 2,
+            activation_factory: Callable[[], torch.nn.Module] = torch.nn.ReLU,
+            initial_prior_variance: float = 1.0,
+            initial_noise_variance: float = 1e-4,
+        ) -> None:
+            super().__init__()
+            if n_basis <= 0:
+                raise ValueError("n_basis must be positive")
+            if n_hidden_layers < 0:
+                raise ValueError("n_hidden_layers must be non-negative")
+            if initial_prior_variance <= 0.0:
+                raise ValueError("initial_prior_variance must be positive")
+            if initial_noise_variance <= 0.0:
+                raise ValueError("initial_noise_variance must be positive")
+
+            self.input_dim = input_dim
+            self.output_dim = output_dim
+            self.n_basis = n_basis
+            self.prior_mean = torch.nn.Parameter(torch.zeros(n_basis))
+            self.log_prior_variance = torch.nn.Parameter(
+                torch.full((n_basis,), float(torch.log(torch.tensor(initial_prior_variance))))
+            )
+            self.log_noise_variance = torch.nn.Parameter(
+                torch.tensor(float(torch.log(torch.tensor(initial_noise_variance))))
+            )
+
+            layers: list[torch.nn.Module] = []
+            width = input_dim
+            for _ in range(n_hidden_layers):
+                layers.append(torch.nn.Linear(width, hidden_size))
+                layers.append(activation_factory())
+                width = hidden_size
+            layers.append(torch.nn.Linear(width, output_dim * n_basis))
+            self.network = torch.nn.Sequential(*layers)
+
+        @property
+        def n_coeff(self) -> int:
+            return self.n_basis
+
+        def forward(self, inputs: RuntimeInput) -> torch.Tensor:
+            z = concatenate_runtime_input(inputs)
+            if z.shape[-1] != self.input_dim:
+                raise ValueError(
+                    f"Expected concatenated input dim {self.input_dim}, got {z.shape[-1]}"
+                )
+
+            flat_z = z.reshape(-1, self.input_dim)
+            flat_features = self.network(flat_z)
+            return flat_features.reshape(*z.shape[:-1], self.output_dim, self.n_basis)
+
+        def prior_variance(self) -> torch.Tensor:
+            return torch.exp(self.log_prior_variance).clamp_min(1e-10)
+
+        def noise_variance(self) -> torch.Tensor:
+            return torch.exp(self.log_noise_variance).clamp_min(1e-10)
 
     @dataclass(frozen=True)
     class FunctionEncoderBasisProvider:

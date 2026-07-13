@@ -37,6 +37,7 @@ def run_baseline_sweep(
     fe_run_dir: str | Path,
     artifact_dir: str | Path,
     neuralfly_run_dir: str | Path | None = None,
+    alpaca_run_dir: str | Path | None = None,
     node_run_dir: str | Path | None = None,
     maml_run_dir: str | Path | None = None,
     scenes: list[str] | None = None,
@@ -105,6 +106,7 @@ def run_baseline_sweep(
         result = run_online_baseline_comparison(
             fe_run_dir=fe_run_dir,
             neuralfly_run_dir=neuralfly_run_dir,
+            alpaca_run_dir=alpaca_run_dir,
             node_run_dir=node_run_dir,
             maml_run_dir=maml_run_dir,
             artifact_dir=window_dir,
@@ -155,6 +157,7 @@ def run_baseline_sweep(
         command_summary={
             "fe_run_dir": fe_run_dir,
             "neuralfly_run_dir": neuralfly_run_dir,
+            "alpaca_run_dir": alpaca_run_dir,
             "node_run_dir": node_run_dir,
             "maml_run_dir": maml_run_dir,
             "split": split,

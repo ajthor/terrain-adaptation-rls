@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional NeuralFly-style training artifact directory.",
     )
     parser.add_argument(
+        "--alpaca-run-dir",
+        default=None,
+        help="Optional ALPaCA training artifact directory.",
+    )
+    parser.add_argument(
         "--node-run-dir",
         default=None,
         help="Optional static Neural ODE training artifact directory.",
@@ -106,11 +111,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     fe_run_dir = Path(args.fe_run_dir)
     neuralfly_run_dir = None if args.neuralfly_run_dir is None else Path(args.neuralfly_run_dir)
+    alpaca_run_dir = None if args.alpaca_run_dir is None else Path(args.alpaca_run_dir)
     node_run_dir = None if args.node_run_dir is None else Path(args.node_run_dir)
     maml_run_dir = None if args.maml_run_dir is None else Path(args.maml_run_dir)
     _validate_fe_run_dir(fe_run_dir)
     if neuralfly_run_dir is not None:
         _validate_neuralfly_run_dir(neuralfly_run_dir)
+    if alpaca_run_dir is not None:
+        _validate_alpaca_run_dir(alpaca_run_dir)
     if node_run_dir is not None:
         _validate_node_run_dir(node_run_dir)
     if maml_run_dir is not None:
@@ -120,11 +128,12 @@ def main(argv: list[str] | None = None) -> int:
         neuralfly_text = (
             "none" if neuralfly_run_dir is None else neuralfly_run_dir.as_posix()
         )
+        alpaca_text = "none" if alpaca_run_dir is None else alpaca_run_dir.as_posix()
         node_text = "none" if node_run_dir is None else node_run_dir.as_posix()
         maml_text = "none" if maml_run_dir is None else maml_run_dir.as_posix()
         print(
             f"valid online baseline eval: fe_run={fe_run_dir} "
-            f"neuralfly_run={neuralfly_text} node_run={node_text} "
+            f"neuralfly_run={neuralfly_text} alpaca_run={alpaca_text} node_run={node_text} "
             f"maml_run={maml_text} scene={args.scene}"
         )
         return 0
@@ -136,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             "command": "eval_online_baselines",
             "fe_run_dir": fe_run_dir,
             "neuralfly_run_dir": neuralfly_run_dir,
+            "alpaca_run_dir": alpaca_run_dir,
             "node_run_dir": node_run_dir,
             "maml_run_dir": maml_run_dir,
             "scene": args.scene,
@@ -169,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     run_online_baseline_comparison(
         fe_run_dir=fe_run_dir,
         neuralfly_run_dir=neuralfly_run_dir,
+        alpaca_run_dir=alpaca_run_dir,
         node_run_dir=node_run_dir,
         maml_run_dir=maml_run_dir,
         artifact_dir=run_dir,
@@ -210,6 +221,13 @@ def _validate_neuralfly_run_dir(path: Path) -> None:
         raise ValueError(f"{path} does not contain resolved_config.json")
     if not (path / "neuralfly_style_basis.pth").is_file():
         raise ValueError(f"{path} does not contain neuralfly_style_basis.pth")
+
+
+def _validate_alpaca_run_dir(path: Path) -> None:
+    if not (path / "resolved_config.json").is_file():
+        raise ValueError(f"{path} does not contain resolved_config.json")
+    if not (path / "alpaca_model.pth").is_file():
+        raise ValueError(f"{path} does not contain alpaca_model.pth")
 
 
 def _validate_node_run_dir(path: Path) -> None:

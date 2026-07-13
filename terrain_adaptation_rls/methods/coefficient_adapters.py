@@ -2,6 +2,7 @@
 
 from .runtime import (
     CoefficientState,
+    ALPaCABasisProvider,
     FeatureProvider,
     FunctionEncoderBasisProvider,
     LinearBasisProvider,
@@ -13,6 +14,7 @@ from .runtime import (
 
 __all__ = [
     "CoefficientState",
+    "ALPaCABasisProvider",
     "FeatureProvider",
     "FunctionEncoderBasisProvider",
     "LinearBasisProvider",

@@ -95,6 +95,14 @@ DEFAULT_METHODS: tuple[MethodSpec, ...] = (
         requires_torch=True,
         description="NeuralFly-style learned basis with online low-dimensional adaptation.",
     ),
+    MethodSpec(
+        name="alpaca_online",
+        category="bayesian_adaptation",
+        phoenix_compatible=True,
+        requires_training=True,
+        requires_torch=True,
+        description="ALPaCA learned features and Bayesian online last-layer adaptation.",
+    ),
 )
 
 

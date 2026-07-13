@@ -14,7 +14,18 @@ import torch
 
 from terrain_adaptation_rls.estimators.linear import linear_predict
 from terrain_adaptation_rls.estimators.linear import solve_ridge_coefficients
-from terrain_adaptation_rls.methods.runtime import Observation, RuntimeInput, TorchCoefficientMethod
+from terrain_adaptation_rls.methods.runtime import (
+    ALPaCABasisProvider,
+    Observation,
+    RuntimeInput,
+    TorchCoefficientMethod,
+)
+from terrain_adaptation_rls.training.alpaca import (
+    alpaca_loss,
+    alpaca_prior_posterior,
+    alpaca_update_posterior,
+    predict_alpaca_features,
+)
 from terrain_adaptation_rls.training.weak_form import solve_weak_coefficients
 from terrain_adaptation_rls.training.weak_form import weak_system_from_basis
 
@@ -202,6 +213,13 @@ def run_vanderpol_toy_evaluation(
         "fe_ode": FEODEBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
         "fe_mlp": FEIncrementBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
         "neuralfly": NeuralFlyToyBasis(n_basis=n_basis, hidden_size=hidden_size).to(device),
+        "alpaca": ALPaCABasisProvider(
+            input_dim=3,
+            output_dim=2,
+            n_basis=n_basis,
+            hidden_size=hidden_size,
+            n_hidden_layers=2,
+        ).to(device),
     }
     direct_models: dict[str, torch.nn.Module] = {
         "node_static": DirectNODEToyModel(hidden_size=hidden_size).to(device),
@@ -221,14 +239,42 @@ def run_vanderpol_toy_evaluation(
         "neuralfly_static": "NeuralFly prior-static",
         "neuralfly_prior_rls": "NeuralFly prior-RLS",
         "neuralfly_rls": "NeuralFly RLS",
+        "alpaca": "ALPaCA basis",
+        "alpaca_rls": "ALPaCA online",
+        "alpaca_static": "ALPaCA prior-static",
+        "alpaca_online": "ALPaCA online",
         "node_static": "NODE static",
         "maml_static": "MAML static",
         "maml_online": "MAML online",
         "zero_delta": "zero state-change",
     }
 
-    train_histories = {
-        name: train_toy_basis(
+    train_histories = {}
+    for index, (name, model) in enumerate(basis_models.items()):
+        if name == "alpaca":
+            train_histories[name] = train_alpaca_toy_basis(
+                model,
+                train_data=train_data,
+                steps=train_steps,
+                batch_size=batch_size,
+                n_example_points=n_example_points,
+                n_query_points=n_query_points,
+                learning_rate=learning_rate,
+                optimizer_name=optimizer_name,
+                weight_decay=weight_decay,
+                gradient_clip=gradient_clip,
+                lr_schedule=lr_schedule,
+                warmup_steps=warmup_steps,
+                final_lr_fraction=final_lr_fraction,
+                validation_data=validation_data,
+                validation_interval=validation_interval,
+                validation_batches=validation_batches,
+                restore_best=restore_best,
+                seed=seed + index,
+                device=device,
+            )
+            continue
+        train_histories[name] = train_toy_basis(
             model,
             train_data=train_data,
             steps=train_steps,
@@ -258,8 +304,6 @@ def run_vanderpol_toy_evaluation(
             weak_ridge=weak_ridge,
             trajectory_steps=train_trajectory_steps,
         )
-        for index, (name, model) in enumerate(basis_models.items())
-    }
     train_histories["node_static"] = train_direct_toy_model(
         direct_models["node_static"],
         train_data=train_data,
@@ -306,6 +350,7 @@ def run_vanderpol_toy_evaluation(
     prior_coefficients = {
         name: solve_global_train_coefficients(model, train_data=train_data, ridge=ridge)
         for name, model in basis_models.items()
+        if name != "alpaca"
     }
 
     if write_diagnostics:
@@ -349,25 +394,35 @@ def run_vanderpol_toy_evaluation(
                 prior_coefficients["neuralfly"],
             ),
             ("neuralfly_rls", "neuralfly", "rls", None),
+            ("alpaca_static", "alpaca", "static", None),
+            ("alpaca_online", "alpaca", "online", None),
         ]
         for name, model_name, update_rule, initial_coefficients in coefficient_specs:
             model = basis_models[model_name]
-            result = evaluate_coefficient_method(
-                model,
-                trajectory=trajectory,
-                update_rule=update_rule,
-                initial_coefficients=initial_coefficients,
-                forgetting_factor=forgetting_factor,
-                initial_covariance=initial_covariance,
-                measurement_noise=measurement_noise,
-                kalman_process_noise=kalman_process_noise,
-                coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
-                coefficient_sgd_momentum=coefficient_sgd_momentum,
-                coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
-                coefficient_window_size=coefficient_window_size,
-                coefficient_window_ridge=coefficient_window_ridge,
-                recursive_horizons=(1, 5, 10, 25),
-            )
+            if model_name == "alpaca":
+                result = evaluate_alpaca_method(
+                    model,
+                    trajectory=trajectory,
+                    update_rule=update_rule,
+                    recursive_horizons=(1, 5, 10, 25),
+                )
+            else:
+                result = evaluate_coefficient_method(
+                    model,
+                    trajectory=trajectory,
+                    update_rule=update_rule,
+                    initial_coefficients=initial_coefficients,
+                    forgetting_factor=forgetting_factor,
+                    initial_covariance=initial_covariance,
+                    measurement_noise=measurement_noise,
+                    kalman_process_noise=kalman_process_noise,
+                    coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+                    coefficient_sgd_momentum=coefficient_sgd_momentum,
+                    coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+                    coefficient_window_size=coefficient_window_size,
+                    coefficient_window_ridge=coefficient_window_ridge,
+                    recursive_horizons=(1, 5, 10, 25),
+                )
             add_method_result(
                 rows=rows,
                 scenario_rows=scenario_rows,
@@ -732,6 +787,151 @@ def train_toy_basis(
         "weak_test_functions": weak_test_functions,
         "weak_ridge": weak_ridge,
     }
+
+
+def train_alpaca_toy_basis(
+    model: torch.nn.Module,
+    *,
+    train_data: dict[float, VanDerPolTaskData],
+    steps: int,
+    batch_size: int,
+    n_example_points: int,
+    n_query_points: int,
+    learning_rate: float,
+    optimizer_name: str,
+    weight_decay: float,
+    gradient_clip: float,
+    lr_schedule: str,
+    warmup_steps: int,
+    final_lr_fraction: float,
+    validation_data: dict[float, VanDerPolTaskData],
+    validation_interval: int,
+    validation_batches: int,
+    restore_best: bool,
+    seed: int,
+    device: torch.device,
+) -> dict[str, object]:
+    optimizer = build_optimizer(
+        model,
+        optimizer_name=optimizer_name,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
+    generator = torch.Generator(device=device).manual_seed(seed)
+    validation_generator = torch.Generator(device=device).manual_seed(seed + 50_000)
+    losses: list[float] = []
+    learning_rates: list[float] = []
+    validation_steps: list[int] = []
+    validation_losses: list[float] = []
+    best_validation_loss = float("inf")
+    best_step: int | None = None
+    best_state: dict[str, torch.Tensor] | None = None
+
+    for step in range(1, steps + 1):
+        lr_scale = learning_rate_scale(
+            step=step,
+            total_steps=steps,
+            schedule=lr_schedule,
+            warmup_steps=warmup_steps,
+            final_lr_fraction=final_lr_fraction,
+        )
+        current_lr = learning_rate * lr_scale
+        set_optimizer_lr(optimizer, current_lr)
+        batch = sample_task_batch(
+            train_data,
+            batch_size=batch_size,
+            n_example_points=n_example_points,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        optimizer.zero_grad(set_to_none=True)
+        loss = alpaca_loss(model, task_batch_to_supervised_tuple(batch))
+        loss.backward()
+        if gradient_clip > 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip)
+        optimizer.step()
+        losses.append(float(loss.detach().cpu()))
+        learning_rates.append(current_lr)
+
+        if should_validate(step, steps=steps, validation_interval=validation_interval):
+            validation_loss = evaluate_alpaca_toy_loss(
+                model,
+                validation_data=validation_data,
+                batches=validation_batches,
+                batch_size=batch_size,
+                n_example_points=n_example_points,
+                n_query_points=n_query_points,
+                generator=validation_generator,
+                device=device,
+            )
+            validation_steps.append(step)
+            validation_losses.append(validation_loss)
+            if validation_loss < best_validation_loss:
+                best_validation_loss = validation_loss
+                best_step = step
+                best_state = clone_state_dict(model)
+
+    if restore_best and best_state is not None:
+        model.load_state_dict(best_state)
+    return _training_history(
+        losses=losses,
+        learning_rates=learning_rates,
+        validation_steps=validation_steps,
+        validation_losses=validation_losses,
+        best_validation_loss=best_validation_loss,
+        best_step=best_step,
+        restore_best=restore_best,
+        best_state=best_state,
+        optimizer_name=optimizer_name,
+        weight_decay=weight_decay,
+        gradient_clip=gradient_clip,
+        lr_schedule=lr_schedule,
+        warmup_steps=warmup_steps,
+        final_lr_fraction=final_lr_fraction,
+    )
+
+
+@torch.no_grad()
+def evaluate_alpaca_toy_loss(
+    model: torch.nn.Module,
+    *,
+    validation_data: dict[float, VanDerPolTaskData],
+    batches: int,
+    batch_size: int,
+    n_example_points: int,
+    n_query_points: int,
+    generator: torch.Generator,
+    device: torch.device,
+) -> float:
+    losses: list[float] = []
+    was_training = model.training
+    model.eval()
+    for _ in range(max(batches, 1)):
+        batch = sample_task_batch(
+            validation_data,
+            batch_size=batch_size,
+            n_example_points=n_example_points,
+            n_query_points=n_query_points,
+            generator=generator,
+            device=device,
+        )
+        losses.append(float(alpaca_loss(model, task_batch_to_supervised_tuple(batch)).cpu()))
+    model.train(was_training)
+    return sum(losses) / len(losses)
+
+
+def task_batch_to_supervised_tuple(
+    batch: dict[str, torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    return (
+        batch["query_x"],
+        batch["query_dt"],
+        batch["query_y"],
+        batch["example_x"],
+        batch["example_dt"],
+        batch["example_y"],
+    )
 
 
 def predict_with_solved_coefficients(
@@ -1430,6 +1630,71 @@ def evaluate_coefficient_method(
         "errors": errors.cpu(),
         "coefficient_history": coefficient_history.cpu(),
         "initial_coefficients": initial_coefficients.squeeze(0).detach().cpu(),
+        "metrics": metrics,
+    }
+
+
+@torch.no_grad()
+def evaluate_alpaca_method(
+    model: torch.nn.Module,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    update_rule: str,
+    recursive_horizons: tuple[int, ...],
+) -> dict[str, object]:
+    xs = trajectory["xs"]
+    dt = trajectory["dt"]
+    target = trajectory["deltas"]
+    posterior = alpaca_prior_posterior(model, batch_size=1)
+    initial_coefficients = posterior.mean.squeeze(0).detach()
+    predictions: list[torch.Tensor] = []
+    coefficients: list[torch.Tensor] = []
+
+    for index in range(xs.shape[0]):
+        inputs = RuntimeInput(
+            xs[index : index + 1].unsqueeze(0),
+            dt[index : index + 1].unsqueeze(0),
+        )
+        features = model(inputs)
+        prediction = predict_alpaca_features(features, posterior.mean).squeeze(0).squeeze(0)
+        if update_rule != "static":
+            posterior = alpaca_update_posterior(
+                model,
+                posterior,
+                features,
+                target[index : index + 1].unsqueeze(0),
+            )
+        predictions.append(prediction.detach())
+        coefficients.append(posterior.mean.squeeze(0).detach())
+
+    prediction_tensor = torch.stack(predictions)
+    errors = torch.linalg.norm(prediction_tensor - target, dim=-1)
+    coefficient_history = torch.stack(coefficients)
+    metrics = summarize_online_errors(
+        errors=errors,
+        predictions=prediction_tensor,
+        target=target,
+    )
+    metrics.update(
+        summarize_recursive_errors(
+            predictor=model,
+            trajectory=trajectory,
+            coefficient_history=coefficient_history,
+            initial_coefficients=initial_coefficients,
+            horizons=recursive_horizons,
+        )
+    )
+    metrics.update(
+        {
+            "final_coefficient_norm": float(torch.linalg.norm(coefficient_history[-1])),
+            "mean_coefficient_norm": float(torch.linalg.norm(coefficient_history, dim=-1).mean()),
+        }
+    )
+    return {
+        "predictions": prediction_tensor.cpu(),
+        "errors": errors.cpu(),
+        "coefficient_history": coefficient_history.cpu(),
+        "initial_coefficients": initial_coefficients.cpu(),
         "metrics": metrics,
     }
 

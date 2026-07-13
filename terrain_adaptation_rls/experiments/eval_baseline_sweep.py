@@ -9,6 +9,7 @@ from terrain_adaptation_rls.configuration import load_config
 from terrain_adaptation_rls.evaluation.artifacts import create_run_dir, write_json
 
 from .eval_online_baselines import (
+    _validate_alpaca_run_dir,
     _validate_fe_run_dir,
     _validate_maml_run_dir,
     _validate_neuralfly_run_dir,
@@ -24,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="FE training artifact directory with resolved_config.json and function_encoder_model.pth.",
     )
     parser.add_argument("--neuralfly-run-dir", default=None)
+    parser.add_argument("--alpaca-run-dir", default=None)
     parser.add_argument("--node-run-dir", default=None)
     parser.add_argument("--maml-run-dir", default=None)
     parser.add_argument(
@@ -118,11 +120,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     fe_run_dir = Path(args.fe_run_dir)
     neuralfly_run_dir = None if args.neuralfly_run_dir is None else Path(args.neuralfly_run_dir)
+    alpaca_run_dir = None if args.alpaca_run_dir is None else Path(args.alpaca_run_dir)
     node_run_dir = None if args.node_run_dir is None else Path(args.node_run_dir)
     maml_run_dir = None if args.maml_run_dir is None else Path(args.maml_run_dir)
     _validate_fe_run_dir(fe_run_dir)
     if neuralfly_run_dir is not None:
         _validate_neuralfly_run_dir(neuralfly_run_dir)
+    if alpaca_run_dir is not None:
+        _validate_alpaca_run_dir(alpaca_run_dir)
     if node_run_dir is not None:
         _validate_node_run_dir(node_run_dir)
     if maml_run_dir is not None:
@@ -157,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             "command": "eval_baseline_sweep",
             "fe_run_dir": fe_run_dir,
             "neuralfly_run_dir": neuralfly_run_dir,
+            "alpaca_run_dir": alpaca_run_dir,
             "node_run_dir": node_run_dir,
             "maml_run_dir": maml_run_dir,
             "split": args.split,
@@ -197,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run_baseline_sweep(
         fe_run_dir=fe_run_dir,
         neuralfly_run_dir=neuralfly_run_dir,
+        alpaca_run_dir=alpaca_run_dir,
         node_run_dir=node_run_dir,
         maml_run_dir=maml_run_dir,
         artifact_dir=run_dir,

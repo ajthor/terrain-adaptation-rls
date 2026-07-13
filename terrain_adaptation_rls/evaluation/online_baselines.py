@@ -51,6 +51,9 @@ METHOD_LABELS = {
     "neuralfly_prior_static": "NeuralFly prior-static",
     "neuralfly_prior_rls": "NeuralFly prior-RLS",
     "offline_neuralfly": "offline NeuralFly-style",
+    "alpaca_prior_static": "ALPaCA prior-static",
+    "alpaca_online": "ALPaCA online",
+    "offline_alpaca": "offline ALPaCA",
     "static_node": "static NODE",
     "maml_static": "MAML-static",
     "maml_online": "MAML-online",
@@ -74,6 +77,7 @@ def run_online_baseline_comparison(
     artifact_dir: str | Path,
     scene: str,
     neuralfly_run_dir: str | Path | None = None,
+    alpaca_run_dir: str | Path | None = None,
     node_run_dir: str | Path | None = None,
     maml_run_dir: str | Path | None = None,
     device: torch.device | str = "cpu",
@@ -104,6 +108,7 @@ def run_online_baseline_comparison(
 
     fe_run_dir = Path(fe_run_dir)
     neuralfly_run_path = None if neuralfly_run_dir is None else Path(neuralfly_run_dir)
+    alpaca_run_path = None if alpaca_run_dir is None else Path(alpaca_run_dir)
     node_run_path = None if node_run_dir is None else Path(node_run_dir)
     maml_run_path = None if maml_run_dir is None else Path(maml_run_dir)
     artifact_dir = Path(artifact_dir)
@@ -364,6 +369,61 @@ def run_online_baseline_comparison(
         recursive_predictors["neuralfly_rls"] = _HistoryCoefficientPredictor(
             neuralfly_model,
             coefficient_histories["neuralfly_rls"],
+            device=device,
+        )
+
+    if alpaca_run_path is not None:
+        from terrain_adaptation_rls.training.alpaca import (
+            alpaca_posterior_from_context,
+            alpaca_prior_posterior,
+            load_alpaca_model,
+            predict_alpaca_batch,
+            predict_alpaca_features,
+        )
+
+        alpaca_config = load_config(alpaca_run_path / "resolved_config.json")
+        alpaca_model = load_alpaca_model(
+            alpaca_config,
+            alpaca_run_path,
+            device=device,
+        )
+        predictions["offline_alpaca"] = predict_alpaca_batch(
+            alpaca_model,
+            (xs, dt, target, example_xs, example_dt, example_ys),
+        ).detach().cpu()
+        alpaca_example_features = alpaca_model(RuntimeInput(example_xs, example_dt))
+        alpaca_context_posterior = alpaca_posterior_from_context(
+            alpaca_model,
+            alpaca_example_features,
+            example_ys,
+        )
+        recursive_predictors["offline_alpaca"] = _FixedCoefficientPredictor(
+            alpaca_model,
+            alpaca_context_posterior.mean.detach(),
+        )
+        alpaca_prior = alpaca_prior_posterior(alpaca_model, batch_size=1)
+        alpaca_prior_features = alpaca_model(RuntimeInput(xs, dt))
+        predictions["alpaca_prior_static"] = predict_alpaca_features(
+            alpaca_prior_features,
+            alpaca_prior.mean,
+        ).detach().cpu()
+        recursive_predictors["alpaca_prior_static"] = _FixedCoefficientPredictor(
+            alpaca_model,
+            alpaca_prior.mean.detach(),
+        )
+        (
+            predictions["alpaca_online"],
+            coefficient_histories["alpaca_online"],
+        ) = stream_alpaca_online(
+            alpaca_model,
+            xs=xs,
+            dt=dt,
+            target=target,
+        )
+        recursive_predictors["alpaca_online"] = _HistoryCoefficientPredictor(
+            alpaca_model,
+            coefficient_histories["alpaca_online"],
+            initial_coefficients=alpaca_prior.mean.detach(),
             device=device,
         )
 
@@ -685,6 +745,44 @@ def stream_maml_online(
             )
 
     return torch.stack(predictions).unsqueeze(0)
+
+
+@torch.no_grad()
+def stream_alpaca_online(
+    model: torch.nn.Module,
+    *,
+    xs: torch.Tensor,
+    dt: torch.Tensor,
+    target: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Stream ALPaCA with predict-before-update Bayesian coefficient updates."""
+
+    from terrain_adaptation_rls.training.alpaca import (
+        alpaca_prior_posterior,
+        alpaca_update_posterior,
+        predict_alpaca_features,
+    )
+
+    posterior = alpaca_prior_posterior(model, batch_size=1)
+    predictions: list[torch.Tensor] = []
+    coefficients: list[torch.Tensor] = []
+    for idx in range(xs.shape[1]):
+        step_inputs = RuntimeInput(
+            xs=xs[:, idx : idx + 1],
+            dt=dt[:, idx : idx + 1],
+        )
+        features = model(step_inputs)
+        prediction = predict_alpaca_features(features, posterior.mean)
+        predictions.append(prediction.squeeze(0).squeeze(0).detach().cpu())
+        posterior = alpaca_update_posterior(
+            model,
+            posterior,
+            features,
+            target[:, idx : idx + 1],
+        )
+        coefficients.append(posterior.mean.squeeze(0).detach().cpu())
+
+    return torch.stack(predictions).unsqueeze(0), torch.stack(coefficients)
 
 
 @torch.no_grad()
@@ -1570,6 +1668,8 @@ def _selected_prediction_names(
         "neuralfly_rls",
         "neuralfly_prior_rls",
         "neuralfly_prior_static",
+        "alpaca_online",
+        "alpaca_prior_static",
         "maml_static",
         "maml_online",
         "linear_rls",
@@ -1577,7 +1677,7 @@ def _selected_prediction_names(
         "static_node",
     ]
     if include_offline:
-        order += ["offline_fe", "offline_neuralfly", "offline_linear"]
+        order += ["offline_fe", "offline_neuralfly", "offline_alpaca", "offline_linear"]
     return [name for name in order if name in predictions]
 
 

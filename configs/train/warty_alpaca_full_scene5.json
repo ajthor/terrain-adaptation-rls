@@ -1,0 +1,54 @@
+{
+  "name": "warty_alpaca_full_scene5",
+  "kind": "train",
+  "platform": "warty",
+  "methods": [
+    "alpaca_online"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "scene0",
+      "scene1",
+      "scene2",
+      "scene3",
+      "scene4",
+      "scene6"
+    ],
+    "validation_scenes": [
+      "scene7"
+    ],
+    "test_scenes": [
+      "scene5"
+    ],
+    "split_policy": "scene_holdout"
+  },
+  "model": {
+    "family": "alpaca",
+    "n_basis": 16,
+    "hidden_size": 256,
+    "n_hidden_layers": 3,
+    "initial_prior_variance": 1.0,
+    "initial_noise_variance": 0.0001
+  },
+  "training": {
+    "steps": 20000,
+    "batch_size": 8,
+    "learning_rate": 0.0005,
+    "optimizer": "adamw",
+    "weight_decay": 0.00001,
+    "lr_schedule": "cosine",
+    "warmup_steps": 500,
+    "final_lr_fraction": 0.05,
+    "gradient_clip_norm": 1.0,
+    "n_points": 256,
+    "n_example_points": 256,
+    "eval_interval": 500,
+    "log_interval": 250
+  },
+  "evaluation": {
+    "max_eval_points": 1024,
+    "trajectory_query_start_index": 256,
+    "trajectory_example_policy": "random_scene"
+  }
+}

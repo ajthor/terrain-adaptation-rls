@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         print(
             "valid Van der Pol toy evaluation: "
-            "FE coefficient variants, NeuralFly, NODE-static, MAML-static/online; "
+            "FE coefficient variants, NeuralFly, ALPaCA, NODE-static, MAML-static/online; "
             f"seeds={seeds}, devices={devices}, "
             f"optimizer={args.optimizer}, lr_schedule={args.lr_schedule}"
         )
