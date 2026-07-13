@@ -1,0 +1,53 @@
+{
+  "name": "warty_fe_legacy_phoenix",
+  "kind": "train",
+  "platform": "warty",
+  "methods": [
+    "fe_static",
+    "fe_rls"
+  ],
+  "output_root": "outputs",
+  "data": {
+    "train_scenes": [
+      "scene0",
+      "scene2",
+      "scene3",
+      "scene4",
+      "scene6",
+      "scene7"
+    ],
+    "validation_scenes": [
+      "scene5"
+    ],
+    "test_scenes": [
+      "scene1"
+    ],
+    "split_policy": "legacy_warty_holdout"
+  },
+  "model": {
+    "family": "function_encoder",
+    "basis_type": "legacy_neural_ode",
+    "n_basis": 8,
+    "hidden_size": 128
+  },
+  "training": {
+    "steps": 10000,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "optimizer": "adam",
+    "gradient_clip_norm": 0.0,
+    "n_points": 1000,
+    "n_example_points": 100,
+    "eval_interval": 250,
+    "log_interval": 250
+  },
+  "evaluation": {
+    "max_eval_points": 2048,
+    "trajectory_query_start_index": 100,
+    "trajectory_example_policy": "random_scene"
+  },
+  "metadata": {
+    "purpose": "Phoenix compatibility checkpoint for the old legacy load_model path.",
+    "legacy_loader": "terrain_adaptation_rls.plot_utils.load_model('function_encoder', device, n_basis=8, hidden_size=128)"
+  }
+}
