@@ -128,6 +128,15 @@ def write_reviewer_comparison_plots(
             window_metrics,
             methods=representative_methods,
         ),
+        write_grouped_method_bar_plot(
+            artifact_path / "adaptation_samples_25pct.png",
+            method_summaries,
+            methods=representative_methods,
+            title="Samples to 25% online error reduction",
+            ylabel="samples",
+            metric="adaptation_samples_to_25pct_improvement_mean",
+            log_scale=False,
+        ),
         write_k_step_plot(
             artifact_path / "logged_k_step_endpoint_error.png",
             method_summaries,
@@ -296,7 +305,14 @@ def write_grouped_method_bar_plot(
     import matplotlib.pyplot as plt
 
     scenes = list(method_summaries)
-    methods = [method for method in methods if any(_find(rows, method) for rows in method_summaries.values())]
+    methods = [
+        method
+        for method in methods
+        if any(_has_metric(_find(rows, method), metric) for rows in method_summaries.values())
+    ]
+    if not methods:
+        path.write_text(f"{metric} unavailable\n")
+        return path
     width = 0.78 / max(1, len(scenes))
     x_positions = list(range(len(methods)))
     fig, ax = plt.subplots(figsize=(max(8, 1.05 * len(methods)), 4.8))
@@ -556,6 +572,10 @@ def _float(row: Mapping[str, str] | None, key: str) -> float:
     if value == "":
         return 0.0
     return float(value)
+
+
+def _has_metric(row: Mapping[str, str] | None, key: str) -> bool:
+    return row is not None and str(row.get(key, "")) != ""
 
 
 def _window_key(row: Mapping[str, str]) -> tuple[str, str, int, int]:

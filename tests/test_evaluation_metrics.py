@@ -4,6 +4,7 @@ try:
     import torch
 
     from terrain_adaptation_rls.evaluation.metrics import (
+        summarize_adaptation_time_metrics,
         summarize_logged_k_step_metrics,
         summarize_prediction_metrics,
     )
@@ -66,6 +67,36 @@ class EvaluationMetricTests(unittest.TestCase):
         self.assertAlmostEqual(metrics["logged_k2_accumulated_error_mean"], 3.0)
         self.assertAlmostEqual(metrics["logged_k2_trajectory_rmse_mean"], (2.5) ** 0.5)
         self.assertAlmostEqual(metrics["logged_k2_integral_square_error_mean"], 5.0)
+
+    def test_summarize_adaptation_time_metrics_reports_threshold_crossing(self):
+        errors = torch.tensor([10.0, 10.0, 8.0, 6.0, 4.0])
+        dt = torch.full((5,), 0.1)
+
+        metrics = summarize_adaptation_time_metrics(
+            errors,
+            dt=dt,
+            window=2,
+            improvement_thresholds=(0.25, 0.50),
+        )
+
+        self.assertEqual(metrics["adaptation_window"], 2.0)
+        self.assertAlmostEqual(metrics["adaptation_initial_error"], 10.0)
+        self.assertEqual(metrics["adaptation_samples_to_25pct_improvement"], 4.0)
+        self.assertAlmostEqual(metrics["adaptation_seconds_to_25pct_improvement"], 0.4)
+        self.assertEqual(metrics["adaptation_reached_25pct_improvement"], 1.0)
+        self.assertEqual(metrics["adaptation_samples_to_50pct_improvement"], 5.0)
+
+    def test_summarize_adaptation_time_metrics_penalizes_never_crossing(self):
+        errors = torch.tensor([10.0, 9.5, 9.0])
+
+        metrics = summarize_adaptation_time_metrics(
+            errors,
+            window=1,
+            improvement_thresholds=(0.50,),
+        )
+
+        self.assertEqual(metrics["adaptation_samples_to_50pct_improvement"], 4.0)
+        self.assertEqual(metrics["adaptation_reached_50pct_improvement"], 0.0)
 
 
 if __name__ == "__main__":

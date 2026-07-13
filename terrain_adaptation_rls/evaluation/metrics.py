@@ -11,6 +11,8 @@ from terrain_adaptation_rls.evaluation.diagnostic_plots import integrate_planar_
 
 STATE_LABELS = ("x", "y", "yaw", "x_velocity", "y_velocity", "yaw_rate")
 DEFAULT_LOGGED_K_STEP_HORIZONS = (1, 5, 10, 20, 50)
+DEFAULT_ADAPTATION_WINDOW = 10
+DEFAULT_ADAPTATION_THRESHOLDS = (0.25, 0.50)
 
 
 def summarize_prediction_metrics(
@@ -43,6 +45,12 @@ def summarize_prediction_metrics(
     prediction_path_length = _path_length(prediction_pose)
     component_abs_error = torch.abs(error_delta)
     component_bias = error_delta.mean(dim=0)
+    adaptation_metrics = summarize_adaptation_time_metrics(
+        error_norm,
+        dt=dt,
+        window=DEFAULT_ADAPTATION_WINDOW,
+        improvement_thresholds=DEFAULT_ADAPTATION_THRESHOLDS,
+    )
 
     metrics: dict[str, float] = {
         "mean_error": float(error_norm.mean()),
@@ -78,6 +86,7 @@ def summarize_prediction_metrics(
             target_path_length,
         ),
         "endpoint_position_error": float(position_error[-1]),
+        **adaptation_metrics,
     }
     if dt is not None:
         dt_single = _single_time(dt)
@@ -91,6 +100,78 @@ def summarize_prediction_metrics(
     metrics.update(_per_dimension_metrics(error_delta))
     if zero_metrics is not None:
         metrics.update(_zero_ratios(metrics, zero_metrics))
+    return metrics
+
+
+def summarize_adaptation_time_metrics(
+    errors: torch.Tensor,
+    *,
+    dt: torch.Tensor | None = None,
+    window: int = DEFAULT_ADAPTATION_WINDOW,
+    improvement_thresholds: Iterable[float] = DEFAULT_ADAPTATION_THRESHOLDS,
+) -> dict[str, float]:
+    """Summarize how quickly an online method improves from its initial error.
+
+    The crossing time is the first sample where the moving-average error is at
+    least ``threshold`` better than the first-window moving-average error. If a
+    method never crosses the threshold, the sample count is ``n_steps + 1`` and
+    the corresponding ``reached`` field is 0.
+    """
+
+    error = errors.flatten().float()
+    n_steps = int(error.numel())
+    if n_steps == 0:
+        return {
+            "adaptation_window": float(max(1, int(window))),
+            "adaptation_initial_error": 0.0,
+            "adaptation_final_error": 0.0,
+            "adaptation_final_improvement_fraction": 0.0,
+            "adaptation_mean_improvement_fraction": 0.0,
+        }
+
+    window = max(1, min(int(window), n_steps))
+    smoothed = _moving_average(error, window)
+    reference = torch.clamp(smoothed[0], min=1e-12)
+    improvement = (reference - smoothed) / reference
+    metrics = {
+        "adaptation_window": float(window),
+        "adaptation_initial_error": float(reference),
+        "adaptation_final_error": float(smoothed[-1]),
+        "adaptation_final_improvement_fraction": float(improvement[-1]),
+        "adaptation_mean_improvement_fraction": float(improvement.mean()),
+    }
+
+    dt_single = _single_time(dt) if dt is not None else None
+    if dt_single is not None and dt_single.numel() != n_steps:
+        raise ValueError(
+            "dt and error length must match: "
+            f"{dt_single.numel()} != {n_steps}"
+        )
+
+    for threshold in improvement_thresholds:
+        threshold = float(threshold)
+        key = _threshold_key(threshold)
+        crossing = torch.nonzero(improvement >= threshold, as_tuple=False)
+        if crossing.numel() == 0:
+            sample_count = n_steps + 1
+            reached = 0.0
+            seconds = (
+                float(dt_single.sum() + dt_single.mean())
+                if dt_single is not None
+                else float(sample_count)
+            )
+        else:
+            crossing_index = int(crossing[0, 0])
+            sample_count = crossing_index + window
+            reached = 1.0
+            seconds = (
+                float(dt_single[:sample_count].sum())
+                if dt_single is not None
+                else float(sample_count)
+            )
+        metrics[f"adaptation_samples_to_{key}_improvement"] = float(sample_count)
+        metrics[f"adaptation_seconds_to_{key}_improvement"] = float(seconds)
+        metrics[f"adaptation_reached_{key}_improvement"] = reached
     return metrics
 
 
@@ -237,6 +318,22 @@ def _single_time(tensor: torch.Tensor) -> torch.Tensor:
     if tensor.ndim == 1:
         return tensor
     raise ValueError(f"expected time shape [steps] or [1, steps], got {tuple(tensor.shape)}")
+
+
+def _moving_average(values: torch.Tensor, window: int) -> torch.Tensor:
+    if window <= 1:
+        return values
+    if values.numel() < window:
+        return values.mean().view(1)
+    kernel = torch.ones(window, dtype=values.dtype, device=values.device) / window
+    return torch.nn.functional.conv1d(
+        values.view(1, 1, -1),
+        kernel.view(1, 1, -1),
+    ).view(-1)
+
+
+def _threshold_key(threshold: float) -> str:
+    return f"{int(round(100.0 * threshold))}pct"
 
 
 def _valid_horizons(horizons: Iterable[int], n_steps: int) -> list[int]:

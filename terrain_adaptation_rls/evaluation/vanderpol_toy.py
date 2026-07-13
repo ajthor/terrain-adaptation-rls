@@ -20,6 +20,7 @@ from terrain_adaptation_rls.methods.runtime import (
     RuntimeInput,
     TorchCoefficientMethod,
 )
+from terrain_adaptation_rls.evaluation.metrics import summarize_adaptation_time_metrics
 from terrain_adaptation_rls.training.alpaca import (
     alpaca_loss,
     alpaca_prior_posterior,
@@ -1807,7 +1808,7 @@ def summarize_online_errors(
     target: torch.Tensor,
 ) -> dict[str, float]:
     zero_error = torch.linalg.norm(target, dim=-1)
-    return {
+    metrics = {
         "mean_error": float(errors.mean()),
         "first_10_mean_error": _prefix_mean(errors, 10),
         "first_25_mean_error": _prefix_mean(errors, 25),
@@ -1821,6 +1822,8 @@ def summarize_online_errors(
             _prefix_mean(zero_error, 25),
         ),
     }
+    metrics.update(summarize_adaptation_time_metrics(errors, window=10))
+    return metrics
 
 
 @torch.no_grad()
@@ -2225,10 +2228,15 @@ def write_seed_aggregate_metric_plot(path: Path, rows: list[dict[str, object]]) 
             scenarios.append(scenario)
     metrics = [
         ("first_25_mean_error_mean", "first 25 online steps"),
+        ("adaptation_samples_to_25pct_improvement_mean", "samples to 25% adaptation"),
         ("mean_error_mean", "all online steps"),
         ("recursive_k10_accumulated_error_mean_mean", "recursive k=10 accumulated"),
     ]
-    fig, axes = plt.subplots(len(metrics), len(scenarios), figsize=(6 * len(scenarios), 8))
+    fig, axes = plt.subplots(
+        len(metrics),
+        len(scenarios),
+        figsize=(6 * len(scenarios), 2.7 * len(metrics)),
+    )
     if len(scenarios) == 1:
         axes = [[ax] for ax in axes]
     for row_index, (metric, title) in enumerate(metrics):
@@ -2738,10 +2746,15 @@ def write_metric_bar_grid(path: Path, rows: list[dict[str, object]]) -> None:
             scenarios.append(scenario)
     metrics = [
         ("first_25_mean_error", "first 25 online steps"),
+        ("adaptation_samples_to_25pct_improvement", "samples to 25% adaptation"),
         ("mean_error", "all online steps"),
         ("recursive_k10_accumulated_error_mean", "recursive k=10 accumulated"),
     ]
-    fig, axes = plt.subplots(len(metrics), len(scenarios), figsize=(6 * len(scenarios), 8))
+    fig, axes = plt.subplots(
+        len(metrics),
+        len(scenarios),
+        figsize=(6 * len(scenarios), 2.7 * len(metrics)),
+    )
     if len(scenarios) == 1:
         axes = [[ax] for ax in axes]
     for row_index, (metric, title) in enumerate(metrics):

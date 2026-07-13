@@ -767,6 +767,7 @@ def write_metric_summary_grid(
 
     metric_specs = [
         ("mean_error_mean", "one-step mean error"),
+        ("adaptation_samples_to_25pct_improvement_mean", "samples to 25% adaptation"),
         ("integrated_position_final_error_mean", "final integrated position error"),
         ("logged_k10_endpoint_error_mean", "logged k=10 endpoint error"),
         ("recursive_k10_accumulated_error_mean", "recursive k=10 accumulated error"),

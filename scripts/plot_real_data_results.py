@@ -100,6 +100,7 @@ def main() -> int:
         output_dir / "real_data_trajectory_metrics.png",
         method_summaries,
         metrics=[
+            ("adaptation_samples_to_25pct_improvement_mean", "Samples to 25% adaptation"),
             ("integrated_position_mean_error_mean", "Integrated position error"),
             ("logged_k10_trajectory_rmse_mean", "Logged 10-step trajectory RMSE"),
         ],
