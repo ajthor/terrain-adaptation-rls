@@ -332,6 +332,46 @@ def alpaca_prior_posterior(model: ALPaCABasisProvider, *, batch_size: int = 1) -
     )
 
 
+def alpaca_zero_posterior(
+    model: ALPaCABasisProvider,
+    *,
+    batch_size: int = 1,
+    initial_covariance: float = 100.0,
+) -> ALPaCAPosterior:
+    """Return a zero-mean posterior state for cold-start ALPaCA adaptation."""
+
+    variance = torch.full(
+        (model.n_coeff,),
+        float(initial_covariance),
+        device=model.prior_mean.device,
+        dtype=model.prior_mean.dtype,
+    )
+    precision_diag = variance.reciprocal()
+    precision = torch.diag(precision_diag).unsqueeze(0).expand(
+        batch_size,
+        model.n_coeff,
+        model.n_coeff,
+    ).clone()
+    covariance = torch.diag(variance).unsqueeze(0).expand(
+        batch_size,
+        model.n_coeff,
+        model.n_coeff,
+    ).clone()
+    mean = torch.zeros(
+        batch_size,
+        model.n_coeff,
+        device=model.prior_mean.device,
+        dtype=model.prior_mean.dtype,
+    )
+    rhs = torch.zeros_like(mean)
+    return ALPaCAPosterior(
+        mean=mean,
+        covariance=covariance,
+        precision=precision,
+        rhs=rhs,
+    )
+
+
 def alpaca_update_posterior(
     model: ALPaCABasisProvider,
     posterior: ALPaCAPosterior,

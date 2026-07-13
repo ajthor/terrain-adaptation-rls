@@ -25,6 +25,7 @@ from terrain_adaptation_rls.training.alpaca import (
     alpaca_loss,
     alpaca_prior_posterior,
     alpaca_update_posterior,
+    alpaca_zero_posterior,
     predict_alpaca_features,
 )
 from terrain_adaptation_rls.training.weak_form import solve_weak_coefficients
@@ -244,6 +245,7 @@ def run_vanderpol_toy_evaluation(
         "alpaca_rls": "ALPaCA online",
         "alpaca_static": "ALPaCA prior-static",
         "alpaca_online": "ALPaCA online",
+        "alpaca_cold_start_online": "ALPaCA cold-start",
         "node_static": "NODE static",
         "maml_static": "MAML static",
         "maml_online": "MAML online",
@@ -397,6 +399,7 @@ def run_vanderpol_toy_evaluation(
             ("neuralfly_rls", "neuralfly", "rls", None),
             ("alpaca_static", "alpaca", "static", None),
             ("alpaca_online", "alpaca", "online", None),
+            ("alpaca_cold_start_online", "alpaca", "online", None),
         ]
         for name, model_name, update_rule, initial_coefficients in coefficient_specs:
             model = basis_models[model_name]
@@ -405,6 +408,8 @@ def run_vanderpol_toy_evaluation(
                     model,
                     trajectory=trajectory,
                     update_rule=update_rule,
+                    cold_start=name == "alpaca_cold_start_online",
+                    initial_covariance=initial_covariance,
                     recursive_horizons=(1, 5, 10, 25),
                 )
             else:
@@ -1641,12 +1646,22 @@ def evaluate_alpaca_method(
     *,
     trajectory: dict[str, torch.Tensor],
     update_rule: str,
+    cold_start: bool = False,
+    initial_covariance: float = 100.0,
     recursive_horizons: tuple[int, ...],
 ) -> dict[str, object]:
     xs = trajectory["xs"]
     dt = trajectory["dt"]
     target = trajectory["deltas"]
-    posterior = alpaca_prior_posterior(model, batch_size=1)
+    posterior = (
+        alpaca_zero_posterior(
+            model,
+            batch_size=1,
+            initial_covariance=initial_covariance,
+        )
+        if cold_start
+        else alpaca_prior_posterior(model, batch_size=1)
+    )
     initial_coefficients = posterior.mean.squeeze(0).detach()
     predictions: list[torch.Tensor] = []
     coefficients: list[torch.Tensor] = []

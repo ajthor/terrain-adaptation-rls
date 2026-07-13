@@ -53,6 +53,7 @@ METHOD_LABELS = {
     "offline_neuralfly": "offline NeuralFly-style",
     "alpaca_prior_static": "ALPaCA prior-static",
     "alpaca_online": "ALPaCA online",
+    "alpaca_cold_start_online": "ALPaCA cold-start",
     "offline_alpaca": "offline ALPaCA",
     "static_node": "static NODE",
     "maml_static": "MAML-static",
@@ -376,6 +377,7 @@ def run_online_baseline_comparison(
         from terrain_adaptation_rls.training.alpaca import (
             alpaca_posterior_from_context,
             alpaca_prior_posterior,
+            alpaca_zero_posterior,
             load_alpaca_model,
             predict_alpaca_batch,
             predict_alpaca_features,
@@ -424,6 +426,27 @@ def run_online_baseline_comparison(
             alpaca_model,
             coefficient_histories["alpaca_online"],
             initial_coefficients=alpaca_prior.mean.detach(),
+            device=device,
+        )
+        alpaca_cold_start = alpaca_zero_posterior(
+            alpaca_model,
+            batch_size=1,
+            initial_covariance=initial_covariance,
+        )
+        (
+            predictions["alpaca_cold_start_online"],
+            coefficient_histories["alpaca_cold_start_online"],
+        ) = stream_alpaca_online(
+            alpaca_model,
+            xs=xs,
+            dt=dt,
+            target=target,
+            initial_posterior=alpaca_cold_start,
+        )
+        recursive_predictors["alpaca_cold_start_online"] = _HistoryCoefficientPredictor(
+            alpaca_model,
+            coefficient_histories["alpaca_cold_start_online"],
+            initial_coefficients=alpaca_cold_start.mean.detach(),
             device=device,
         )
 
@@ -754,6 +777,7 @@ def stream_alpaca_online(
     xs: torch.Tensor,
     dt: torch.Tensor,
     target: torch.Tensor,
+    initial_posterior: object | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Stream ALPaCA with predict-before-update Bayesian coefficient updates."""
 
@@ -763,7 +787,11 @@ def stream_alpaca_online(
         predict_alpaca_features,
     )
 
-    posterior = alpaca_prior_posterior(model, batch_size=1)
+    posterior = (
+        alpaca_prior_posterior(model, batch_size=1)
+        if initial_posterior is None
+        else initial_posterior
+    )
     predictions: list[torch.Tensor] = []
     coefficients: list[torch.Tensor] = []
     for idx in range(xs.shape[1]):
@@ -1669,6 +1697,7 @@ def _selected_prediction_names(
         "neuralfly_prior_rls",
         "neuralfly_prior_static",
         "alpaca_online",
+        "alpaca_cold_start_online",
         "alpaca_prior_static",
         "maml_static",
         "maml_online",
@@ -1694,6 +1723,8 @@ def _plot_kwargs(name: str) -> dict[str, object]:
         return {"linewidth": 1.0, "alpha": 0.75, "linestyle": ":"}
     if "prior" in name:
         return {"linewidth": 1.2, "alpha": 0.9, "linestyle": "-."}
+    if "cold_start" in name:
+        return {"linewidth": 1.2, "alpha": 0.9, "linestyle": "--"}
     if name in {"fe_sgd", "fe_window_ls"}:
         return {"linewidth": 1.0, "alpha": 0.85}
     return {"linewidth": 1.2}

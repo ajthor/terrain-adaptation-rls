@@ -103,6 +103,14 @@ DEFAULT_METHODS: tuple[MethodSpec, ...] = (
         requires_torch=True,
         description="ALPaCA learned features and Bayesian online last-layer adaptation.",
     ),
+    MethodSpec(
+        name="alpaca_cold_start_online",
+        category="bayesian_adaptation",
+        phoenix_compatible=True,
+        requires_training=True,
+        requires_torch=True,
+        description="ALPaCA learned features with zero-mean Bayesian online last-layer adaptation.",
+    ),
 )
 
 
