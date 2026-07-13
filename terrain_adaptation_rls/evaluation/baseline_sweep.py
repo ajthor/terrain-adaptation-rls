@@ -12,6 +12,33 @@ from typing import Iterable, Mapping
 from terrain_adaptation_rls.configuration import ExperimentConfig, load_config
 from terrain_adaptation_rls.evaluation.artifacts import write_json
 
+ONLINE_ADAPTATION_METHODS = (
+    "fe_rls",
+    "fe_bayes",
+    "fe_prior_rls",
+    "fe_prior_bayes",
+    "fe_kalman",
+    "fe_window_ls",
+    "fe_sgd",
+    "neuralfly_rls",
+    "neuralfly_prior_rls",
+    "alpaca_cold_start_online",
+    "alpaca_online",
+    "maml_online",
+    "linear_rls",
+)
+COLD_START_ONLINE_METHODS = (
+    "fe_rls",
+    "fe_bayes",
+    "fe_kalman",
+    "fe_window_ls",
+    "fe_sgd",
+    "neuralfly_rls",
+    "alpaca_cold_start_online",
+    "maml_online",
+    "linear_rls",
+)
+
 
 @dataclass(frozen=True)
 class SweepWindow:
@@ -665,6 +692,24 @@ def write_sweep_artifacts(
     write_method_bar_plot(artifact_dir / "mean_error_by_method.png", method_summary)
     write_per_window_plot(artifact_dir / "mean_error_by_window.png", rows)
     write_metric_summary_grid(artifact_dir / "metric_summary_grid.png", method_summary)
+    write_online_error_over_time_artifacts(
+        artifact_dir,
+        windows=windows,
+        method_summary=method_summary,
+        methods=ONLINE_ADAPTATION_METHODS,
+        csv_name="online_error_over_time.csv",
+        plot_name="online_error_over_time.png",
+        title="Online adaptation error over time",
+    )
+    write_online_error_over_time_artifacts(
+        artifact_dir,
+        windows=windows,
+        method_summary=method_summary,
+        methods=COLD_START_ONLINE_METHODS,
+        csv_name="cold_start_online_error_over_time.csv",
+        plot_name="cold_start_online_error_over_time.png",
+        title="Cold-start online adaptation error over time",
+    )
 
 
 def write_rows_csv(path: Path, rows: list[Mapping[str, object]]) -> None:
@@ -804,6 +849,130 @@ def write_metric_summary_grid(
     plt.close(fig)
 
 
+def write_online_error_over_time_artifacts(
+    artifact_dir: Path,
+    *,
+    windows: list[SweepWindow],
+    method_summary: list[Mapping[str, object]],
+    methods: Iterable[str],
+    csv_name: str,
+    plot_name: str,
+    title: str,
+) -> None:
+    """Aggregate per-step streaming error traces across sweep windows."""
+
+    labels = {str(row["method"]): str(row["label"]) for row in method_summary}
+    available_methods = [
+        method
+        for method in methods
+        if method in labels
+        and any(
+            _streaming_predictions_path(artifact_dir, window).is_file()
+            and _csv_has_field(
+                _streaming_predictions_path(artifact_dir, window),
+                f"{method}_error",
+            )
+            for window in windows
+        )
+    ]
+    if not available_methods:
+        return
+
+    traces: dict[str, dict[int, list[tuple[float, float]]]] = {
+        method: {} for method in available_methods
+    }
+    for window in windows:
+        path = _streaming_predictions_path(artifact_dir, window)
+        if not path.is_file():
+            continue
+        with path.open(newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                index = int(float(row["index"]))
+                time = float(row["time"])
+                for method in available_methods:
+                    value = row.get(f"{method}_error", "")
+                    if value == "":
+                        continue
+                    traces[method].setdefault(index, []).append((time, float(value)))
+
+    rows: list[dict[str, object]] = []
+    for method in available_methods:
+        cumulative = 0.0
+        for index in sorted(traces[method]):
+            samples = traces[method][index]
+            if not samples:
+                continue
+            errors = [error for _, error in samples]
+            time_values = [time for time, _ in samples]
+            mean_error = mean(errors)
+            cumulative += mean_error
+            rows.append(
+                {
+                    "method": method,
+                    "label": labels[method],
+                    "index": index,
+                    "time_mean": mean(time_values),
+                    "n_windows": len(errors),
+                    "mean_error": mean_error,
+                    "median_error": median(errors),
+                    "cumulative_mean_error": cumulative,
+                }
+            )
+
+    write_rows_csv(artifact_dir / csv_name, rows)
+    write_online_error_over_time_plot(
+        artifact_dir / plot_name,
+        rows,
+        title=title,
+    )
+
+
+def write_online_error_over_time_plot(
+    path: Path,
+    rows: list[Mapping[str, object]],
+    *,
+    title: str,
+) -> None:
+    """Write averaged per-step and cumulative online adaptation error."""
+
+    if not rows:
+        return
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    methods = []
+    for row in rows:
+        method = str(row["method"])
+        if method not in methods:
+            methods.append(method)
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
+    for method in methods:
+        method_rows = [row for row in rows if str(row["method"]) == method]
+        method_rows = sorted(method_rows, key=lambda row: int(row["index"]))
+        label = str(method_rows[0]["label"])
+        x_values = [float(row["time_mean"]) for row in method_rows]
+        mean_values = [float(row["mean_error"]) for row in method_rows]
+        cumulative_values = [float(row["cumulative_mean_error"]) for row in method_rows]
+        axes[0].plot(x_values, mean_values, linewidth=1.2, label=label)
+        axes[1].plot(x_values, cumulative_values, linewidth=1.2, label=label)
+
+    axes[0].set_ylabel("mean one-step error")
+    axes[0].grid(alpha=0.25)
+    axes[1].set_ylabel("cumulative mean error")
+    axes[1].set_xlabel("time from window start [s]")
+    axes[1].grid(alpha=0.25)
+    axes[0].legend(ncol=2, fontsize=8)
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
 def _aggregate_extra_numeric_fields(
     rows: list[Mapping[str, object]],
     existing_summary_keys: Iterable[str],
@@ -868,3 +1037,21 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     if abs(denominator) < 1e-12:
         return 0.0
     return numerator / denominator
+
+
+def _streaming_predictions_path(artifact_dir: Path, window: SweepWindow) -> Path:
+    return (
+        artifact_dir
+        / f"{window.split}_{window.scene}_start{window.start_index}"
+        / "streaming_predictions.csv"
+    )
+
+
+def _csv_has_field(path: Path, field: str) -> bool:
+    with path.open(newline="") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return False
+    return field in header
