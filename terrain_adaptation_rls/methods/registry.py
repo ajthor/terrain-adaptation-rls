@@ -48,6 +48,22 @@ DEFAULT_METHODS: tuple[MethodSpec, ...] = (
         description="Function Encoder basis with recursive least squares coefficients.",
     ),
     MethodSpec(
+        name="fe_bayes",
+        category="coefficient_adaptation",
+        phoenix_compatible=True,
+        requires_training=True,
+        requires_torch=True,
+        description="Function Encoder basis with Bayesian linear coefficient updates.",
+    ),
+    MethodSpec(
+        name="fe_prior_bayes",
+        category="coefficient_adaptation",
+        phoenix_compatible=True,
+        requires_training=True,
+        requires_torch=True,
+        description="Function Encoder basis with training-scene prior coefficients and Bayesian updates.",
+    ),
+    MethodSpec(
         name="maml_online",
         category="gradient_adaptation",
         phoenix_compatible=True,

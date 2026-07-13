@@ -565,7 +565,7 @@ else:
                 **kwargs,
             )
 
-        if name in {"fe_rls", "fe_kalman", "fe_sgd", "fe_window_ls"}:
+        if name in {"fe_rls", "fe_bayes", "fe_kalman", "fe_sgd", "fe_window_ls"}:
             try:
                 model = kwargs.pop("model")
             except KeyError as exc:
@@ -573,10 +573,13 @@ else:
 
             update_rules = {
                 "fe_rls": "rls",
+                "fe_bayes": "kalman",
                 "fe_kalman": "kalman",
                 "fe_sgd": "sgd",
                 "fe_window_ls": "window_ls",
             }
+            if name == "fe_bayes":
+                kwargs["process_noise"] = 0.0
             return TorchCoefficientMethod(
                 FunctionEncoderBasisProvider(model),
                 update_rule=update_rules[name],

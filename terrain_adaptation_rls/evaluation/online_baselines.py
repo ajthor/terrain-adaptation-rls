@@ -43,7 +43,9 @@ METHOD_LABELS = {
     "fe_rls": "FE-RLS",
     "fe_prior_static": "FE prior-static",
     "fe_prior_rls": "FE prior-RLS",
+    "fe_prior_bayes": "FE prior-Bayes",
     "fe_kalman": "FE-Kalman",
+    "fe_bayes": "FE-Bayes",
     "fe_sgd": "FE-SGD",
     "fe_window_ls": "FE-window LS",
     "offline_fe": "offline FE",
@@ -210,6 +212,31 @@ def run_online_baseline_comparison(
             initial_coefficients=fe_prior_coefficients.detach(),
             device=device,
         )
+        fe_prior_bayes_method = TorchCoefficientMethod(
+            fe_provider,
+            update_rule="kalman",
+            output_dim=6,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            process_noise=0.0,
+            initial_coefficients=fe_prior_coefficients.detach(),
+            device=device,
+        )
+        predictions["fe_prior_bayes"], coefficient_histories["fe_prior_bayes"] = (
+            stream_runtime_method(
+                fe_prior_bayes_method,
+                xs=xs,
+                dt=dt,
+                target=target,
+                time=time,
+            )
+        )
+        recursive_predictors["fe_prior_bayes"] = _HistoryCoefficientPredictor(
+            fe_provider,
+            coefficient_histories["fe_prior_bayes"],
+            initial_coefficients=fe_prior_coefficients.detach(),
+            device=device,
+        )
 
     fe_method = TorchCoefficientMethod(
         fe_provider,
@@ -234,6 +261,15 @@ def run_online_baseline_comparison(
 
     if include_fe_variants:
         fe_variant_methods = {
+            "fe_bayes": TorchCoefficientMethod(
+                fe_provider,
+                update_rule="kalman",
+                output_dim=6,
+                initial_covariance=initial_covariance,
+                measurement_noise=measurement_noise,
+                process_noise=0.0,
+                device=device,
+            ),
             "fe_kalman": TorchCoefficientMethod(
                 fe_provider,
                 update_rule="kalman",
@@ -1690,7 +1726,9 @@ def _selected_prediction_names(
     order = [
         "fe_rls",
         "fe_prior_rls",
+        "fe_prior_bayes",
         "fe_prior_static",
+        "fe_bayes",
         "fe_kalman",
         "fe_window_ls",
         "neuralfly_rls",

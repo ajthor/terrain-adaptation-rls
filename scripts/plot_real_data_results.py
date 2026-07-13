@@ -21,7 +21,9 @@ DEFAULT_RUNS = {
 METHODS = [
     "offline_fe",
     "fe_rls",
+    "fe_bayes",
     "fe_prior_rls",
+    "fe_prior_bayes",
     "fe_window_ls",
     "fe_kalman",
     "neuralfly_rls",
@@ -40,7 +42,9 @@ METHODS = [
 METHOD_LABELS = {
     "offline_fe": "FE static",
     "fe_rls": "FE-RLS",
+    "fe_bayes": "FE-Bayes",
     "fe_prior_rls": "FE prior RLS",
+    "fe_prior_bayes": "FE prior Bayes",
     "fe_window_ls": "FE window LS",
     "fe_kalman": "FE Kalman",
     "neuralfly_rls": "NeuralFly RLS",
@@ -59,7 +63,9 @@ METHOD_LABELS = {
 METHOD_COLORS = {
     "offline_fe": "#4b5563",
     "fe_rls": "#0f766e",
+    "fe_bayes": "#10b981",
     "fe_prior_rls": "#115e59",
+    "fe_prior_bayes": "#047857",
     "fe_window_ls": "#2563eb",
     "fe_kalman": "#0891b2",
     "neuralfly_rls": "#d97706",
@@ -261,6 +267,7 @@ def write_k_step_plot(
     methods = [
         "offline_fe",
         "fe_rls",
+        "fe_bayes",
         "fe_window_ls",
         "neuralfly_rls",
         "alpaca_cold_start_online",
@@ -304,6 +311,7 @@ def write_scene_summary_plot(path: Path, rows: list[dict[str, str]], *, title: s
     methods = [
         "offline_fe",
         "fe_rls",
+        "fe_bayes",
         "fe_window_ls",
         "fe_kalman",
         "neuralfly_rls",

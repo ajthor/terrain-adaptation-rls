@@ -231,7 +231,9 @@ def run_vanderpol_toy_evaluation(
         "fe_ode": "FE-ODE basis",
         "fe_ode_static": "FE-ODE prior-static",
         "fe_ode_prior_rls": "FE-ODE prior-RLS",
+        "fe_ode_prior_bayes": "FE-ODE prior-Bayes",
         "fe_ode_rls": "FE-ODE RLS",
+        "fe_ode_bayes": "FE-ODE Bayes",
         "fe_ode_kalman": "FE-ODE Kalman",
         "fe_ode_sgd": "FE-ODE SGD",
         "fe_ode_window_ls": "FE-ODE window LS",
@@ -384,7 +386,9 @@ def run_vanderpol_toy_evaluation(
         coefficient_specs = [
             ("fe_ode_static", "fe_ode", "static", prior_coefficients["fe_ode"]),
             ("fe_ode_prior_rls", "fe_ode", "rls", prior_coefficients["fe_ode"]),
+            ("fe_ode_prior_bayes", "fe_ode", "bayes", prior_coefficients["fe_ode"]),
             ("fe_ode_rls", "fe_ode", "rls", None),
+            ("fe_ode_bayes", "fe_ode", "bayes", None),
             ("fe_ode_kalman", "fe_ode", "kalman", None),
             ("fe_ode_sgd", "fe_ode", "sgd", None),
             ("fe_ode_window_ls", "fe_ode", "window_ls", None),
@@ -1576,12 +1580,18 @@ def evaluate_coefficient_method(
     )
     method = TorchCoefficientMethod(
         model,
-        update_rule="rls" if update_rule == "static" else update_rule,
+        update_rule=(
+            "rls"
+            if update_rule == "static"
+            else "kalman"
+            if update_rule == "bayes"
+            else update_rule
+        ),
         output_dim=2,
         forgetting_factor=forgetting_factor,
         initial_covariance=initial_covariance,
         measurement_noise=measurement_noise,
-        process_noise=kalman_process_noise,
+        process_noise=0.0 if update_rule == "bayes" else kalman_process_noise,
         learning_rate=coefficient_sgd_learning_rate,
         momentum=coefficient_sgd_momentum,
         weight_decay=coefficient_sgd_weight_decay,
