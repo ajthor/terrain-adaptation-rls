@@ -26,6 +26,9 @@ METHODS = [
     "fe_kalman",
     "neuralfly_rls",
     "neuralfly_prior_rls",
+    "alpaca_online",
+    "alpaca_prior_static",
+    "offline_alpaca",
     "offline_linear",
     "linear_rls",
     "static_node",
@@ -41,6 +44,9 @@ METHOD_LABELS = {
     "fe_kalman": "FE Kalman",
     "neuralfly_rls": "NeuralFly RLS",
     "neuralfly_prior_rls": "NeuralFly prior RLS",
+    "alpaca_online": "ALPaCA online",
+    "alpaca_prior_static": "ALPaCA prior static",
+    "offline_alpaca": "ALPaCA offline",
     "offline_linear": "Linear offline",
     "linear_rls": "Linear RLS",
     "static_node": "NODE static",
@@ -56,6 +62,9 @@ METHOD_COLORS = {
     "fe_kalman": "#0891b2",
     "neuralfly_rls": "#d97706",
     "neuralfly_prior_rls": "#b45309",
+    "alpaca_online": "#16a34a",
+    "alpaca_prior_static": "#86efac",
+    "offline_alpaca": "#22c55e",
     "offline_linear": "#9ca3af",
     "linear_rls": "#6b7280",
     "static_node": "#dc2626",
@@ -245,7 +254,17 @@ def write_k_step_plot(
     metric: str,
 ) -> None:
     horizons = [1, 5, 10, 20, 50]
-    methods = ["offline_fe", "fe_rls", "fe_window_ls", "neuralfly_rls", "offline_linear", "static_node", "maml_online"]
+    methods = [
+        "offline_fe",
+        "fe_rls",
+        "fe_window_ls",
+        "neuralfly_rls",
+        "alpaca_online",
+        "offline_alpaca",
+        "offline_linear",
+        "static_node",
+        "maml_online",
+    ]
     fig, axes = plt.subplots(1, len(summaries), figsize=(5.2 * len(summaries), 4.2), sharey=False)
     if len(summaries) == 1:
         axes = [axes]
@@ -277,7 +296,17 @@ def write_k_step_plot(
 
 def write_scene_summary_plot(path: Path, rows: list[dict[str, str]], *, title: str) -> None:
     scenes = sorted({row["scene"] for row in rows})
-    methods = ["offline_fe", "fe_rls", "fe_window_ls", "fe_kalman", "neuralfly_rls", "offline_linear", "static_node"]
+    methods = [
+        "offline_fe",
+        "fe_rls",
+        "fe_window_ls",
+        "fe_kalman",
+        "neuralfly_rls",
+        "alpaca_online",
+        "offline_alpaca",
+        "offline_linear",
+        "static_node",
+    ]
     fig, axes = plt.subplots(len(scenes), 1, figsize=(9, max(3.0, 2.2 * len(scenes))), sharex=False)
     if len(scenes) == 1:
         axes = [axes]
