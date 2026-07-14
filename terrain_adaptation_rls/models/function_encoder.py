@@ -2,26 +2,41 @@ import torch
 from function_encoder.model.neural_ode import NeuralODE, ODEFunc
 from function_encoder.function_encoder import FunctionEncoder, BasisFunctions
 from .networks import MLP
-from .rk4 import rk4_step
+from .rk4 import make_augmented_rk4_delta_step, rk4_step
 
 
-def create_model(device, n_basis=8, hidden_size=128):
+def create_model(device, n_basis=8, hidden_size=128, augmentation_dim=0):
     """
     Create a FunctionEncoder model instance.
     device: torch device string
     n_basis: number of basis functions
     """
 
+    augmentation_dim = int(augmentation_dim)
+    if augmentation_dim < 0:
+        raise ValueError("augmentation_dim must be non-negative")
+    input_dim = 9 + augmentation_dim
+    output_dim = 6 + augmentation_dim
+    integrator = (
+        rk4_step
+        if augmentation_dim == 0
+        else make_augmented_rk4_delta_step(augmentation_dim)
+    )
+
     def basis_factory():
         return NeuralODE(
             ode_func=ODEFunc(
-                model=MLP(layer_sizes=[9, hidden_size, hidden_size, 6], activation=torch.nn.ReLU())
+                model=MLP(
+                    layer_sizes=[input_dim, hidden_size, hidden_size, output_dim],
+                    activation=torch.nn.ReLU(),
+                )
             ),
-            integrator=rk4_step,
+            integrator=integrator,
         )
 
     basis_functions = BasisFunctions(*[basis_factory() for _ in range(n_basis)])
     model = FunctionEncoder(basis_functions).to(device)
+    model.augmentation_dim = augmentation_dim
     return model
 
 
@@ -30,9 +45,9 @@ def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 
-def load_model(device, path, n_basis=8, hidden_size=128):
+def load_model(device, path, n_basis=8, hidden_size=128, augmentation_dim=0):
     """Load a FunctionEncoder model from a file."""
-    model = create_model(device, n_basis, hidden_size)
+    model = create_model(device, n_basis, hidden_size, augmentation_dim=augmentation_dim)
     model.load_state_dict(torch.load(path, map_location=device))
     return model
 

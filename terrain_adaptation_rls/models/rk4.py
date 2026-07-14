@@ -40,3 +40,49 @@ def rk4_state_step(func, x, dt, **ode_kwargs):
 
 
 rk4_step = rk4_delta_step
+
+
+def make_augmented_rk4_delta_step(augmentation_dim: int):
+    """Build an RK4 delta integrator with zero-initialized hidden state dims.
+
+    The external model input remains ``[..., 8]``: six physical state dimensions
+    followed by two controls. Internally, RK4 advances ``6 + augmentation_dim``
+    state dimensions while holding controls fixed. Only the physical six-state
+    delta is returned, preserving the FE/NODE runtime contract.
+    """
+
+    if augmentation_dim < 0:
+        raise ValueError("augmentation_dim must be non-negative")
+    if augmentation_dim == 0:
+        return rk4_delta_step
+
+    augmented_state_dim = 6 + augmentation_dim
+
+    def augmented_rk4_delta_step(func, x, dt, **ode_kwargs):
+        t = torch.zeros_like(dt, device=dt.device)
+        u = x[..., 6:8]
+        zeros = torch.zeros(
+            (*x.shape[:-1], augmentation_dim),
+            dtype=x.dtype,
+            device=x.device,
+        )
+        z0 = torch.cat([x[..., :6], zeros], dim=-1)
+        z = torch.cat([z0, u], dim=-1)
+
+        k1 = func(t, z, **ode_kwargs)
+
+        z1 = torch.cat([z0 + (dt / 2).unsqueeze(-1) * k1, u], dim=-1)
+        k2 = func(t + dt / 2, z1, **ode_kwargs)
+
+        z2 = torch.cat([z0 + (dt / 2).unsqueeze(-1) * k2, u], dim=-1)
+        k3 = func(t + dt / 2, z2, **ode_kwargs)
+
+        z3 = torch.cat([z0 + dt.unsqueeze(-1) * k3, u], dim=-1)
+        k4 = func(t + dt, z3, **ode_kwargs)
+
+        delta = (dt / 6).unsqueeze(-1) * (k1 + 2 * k2 + 2 * k3 + k4)
+        return delta[..., :6]
+
+    augmented_rk4_delta_step.augmentation_dim = augmentation_dim
+    augmented_rk4_delta_step.state_dim = augmented_state_dim
+    return augmented_rk4_delta_step

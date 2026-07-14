@@ -49,7 +49,13 @@ def run_function_encoder_training(
 
     n_basis = int(config.model.get("n_basis", 8))
     hidden_size = int(config.model.get("hidden_size", 128))
-    model = create_model(device, n_basis=n_basis, hidden_size=hidden_size)
+    augmentation_dim = int(config.model.get("augmentation_dim", config.model.get("aug_dim", 0)))
+    model = create_model(
+        device,
+        n_basis=n_basis,
+        hidden_size=hidden_size,
+        augmentation_dim=augmentation_dim,
+    )
 
     training = config.training
     learning_rate = float(training.get("learning_rate", 1e-3))
@@ -295,6 +301,7 @@ def run_function_encoder_training(
         "n_example_points": n_example_points,
         "n_basis": n_basis,
         "hidden_size": hidden_size,
+        "augmentation_dim": augmentation_dim,
         "learning_rate": learning_rate,
         "optimizer": optimizer_name,
         "weight_decay": weight_decay,
@@ -440,8 +447,18 @@ def evaluate_raw_basis_functions(
     except AttributeError as exc:
         raise TypeError("model does not expose FunctionEncoder basis modules") from exc
 
+    augmentation_dim = int(getattr(model, "augmentation_dim", 0))
+    basis_xs = xs
+    if augmentation_dim > 0:
+        zeros = torch.zeros(
+            (*xs.shape[:-1], augmentation_dim),
+            dtype=xs.dtype,
+            device=xs.device,
+        )
+        basis_xs = torch.cat([xs[..., :6], zeros, xs[..., 6:8]], dim=-1)
+
     time = torch.zeros(xs.shape[:-1], dtype=xs.dtype, device=xs.device)
-    raw_basis = [basis.ode_func(time, xs) for basis in basis_modules]
+    raw_basis = [basis.ode_func(time, basis_xs)[..., :6] for basis in basis_modules]
     return torch.stack(raw_basis, dim=-1)
 
 
