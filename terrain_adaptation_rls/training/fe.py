@@ -86,6 +86,26 @@ def run_function_encoder_training(
             raise ValueError("weak_start_step must be positive")
         if weak_ramp_steps < 0:
             raise ValueError("weak_ramp_steps must be non-negative")
+    ode_regularization = dict(
+        training.get(
+            "ode_regularization",
+            config.extras.get("ode_regularization", {}),
+        )
+        or {}
+    )
+    kinetic_weight = float(ode_regularization.get("kinetic_weight", 0.0))
+    jacobian_weight = float(ode_regularization.get("jacobian_weight", 0.0))
+    ode_reg_start_step = int(ode_regularization.get("start_step", 1))
+    ode_reg_ramp_steps = int(ode_regularization.get("ramp_steps", 0))
+    ode_reg_max_points = int(ode_regularization.get("max_points", 128))
+    if kinetic_weight < 0.0 or jacobian_weight < 0.0:
+        raise ValueError("ODE regularization weights must be non-negative")
+    if ode_reg_start_step <= 0:
+        raise ValueError("ODE regularization start_step must be positive")
+    if ode_reg_ramp_steps < 0:
+        raise ValueError("ODE regularization ramp_steps must be non-negative")
+    if ode_reg_max_points <= 0:
+        raise ValueError("ODE regularization max_points must be positive")
 
     evaluation = config.evaluation
     max_eval_points = int(evaluation.get("max_eval_points", 512))
@@ -140,6 +160,8 @@ def run_function_encoder_training(
     train_losses: list[float] = []
     pointwise_train_losses: list[float] = []
     weak_train_losses: list[float] = []
+    ode_kinetic_losses: list[float] = []
+    ode_jacobian_losses: list[float] = []
     learning_rates: list[float] = []
     validation_losses: list[dict[str, float | int | str]] = []
     latest_validation_losses: dict[str, float] = {}
@@ -184,6 +206,29 @@ def run_function_encoder_training(
             loss = weak_loss if weak_only else pointwise_loss + current_weak_weight * weak_loss
         else:
             loss = pointwise_loss
+        ode_kinetic_loss = None
+        ode_jacobian_loss = None
+        current_ode_reg_scale = 0.0
+        if (
+            step >= ode_reg_start_step
+            and (kinetic_weight > 0.0 or jacobian_weight > 0.0)
+        ):
+            current_ode_reg_scale = _scheduled_weak_weight(
+                1.0,
+                step=step,
+                start_step=ode_reg_start_step,
+                ramp_steps=ode_reg_ramp_steps,
+            )
+            ode_kinetic_loss, ode_jacobian_loss = ode_vector_field_regularization(
+                model,
+                xs=batch[0],
+                max_points=ode_reg_max_points,
+                include_jacobian=jacobian_weight > 0.0,
+            )
+            loss = loss + current_ode_reg_scale * (
+                kinetic_weight * ode_kinetic_loss
+                + jacobian_weight * ode_jacobian_loss
+            )
         loss.backward()
         if gradient_clip_norm > 0.0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
@@ -194,6 +239,10 @@ def run_function_encoder_training(
         pointwise_train_losses.append(float(pointwise_loss.detach().cpu()))
         if weak_loss is not None:
             weak_train_losses.append(float(weak_loss.detach().cpu()))
+        if ode_kinetic_loss is not None:
+            ode_kinetic_losses.append(float(ode_kinetic_loss.detach().cpu()))
+        if ode_jacobian_loss is not None:
+            ode_jacobian_losses.append(float(ode_jacobian_loss.detach().cpu()))
         learning_rates.append(current_lr)
 
         if validation_batches and (step == steps or step % eval_interval == 0):
@@ -219,6 +268,12 @@ def run_function_encoder_training(
                     f" pointwise_loss={pointwise_train_losses[-1]:.6g}"
                     f" weak_loss={weak_train_losses[-1]:.6g}"
                     f" weak_weight={current_weak_weight:.6g}"
+                )
+            if ode_kinetic_loss is not None:
+                message += (
+                    f" kinetic_loss={ode_kinetic_losses[-1]:.6g}"
+                    f" jacobian_loss={ode_jacobian_losses[-1]:.6g}"
+                    f" ode_reg_scale={current_ode_reg_scale:.6g}"
                 )
             if latest_validation_losses:
                 validation_text = ", ".join(
@@ -256,6 +311,9 @@ def run_function_encoder_training(
         "train_losses": train_losses,
         "pointwise_train_losses": pointwise_train_losses,
         "weak_train_losses": weak_train_losses,
+        "ode_regularization": ode_regularization,
+        "ode_kinetic_losses": ode_kinetic_losses,
+        "ode_jacobian_losses": ode_jacobian_losses,
         "learning_rates": learning_rates,
         "validation_losses": validation_losses,
         "final_train_loss": train_losses[-1] if train_losses else None,
@@ -323,6 +381,47 @@ def weak_function_encoder_loss(
     )
     weak_prediction = torch.einsum("bmdk,bk->bmd", query_weak_basis, coefficients)
     return torch.nn.functional.mse_loss(weak_prediction, query_weak_target)
+
+
+def ode_vector_field_regularization(
+    model: torch.nn.Module,
+    *,
+    xs: torch.Tensor,
+    max_points: int = 128,
+    include_jacobian: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Regularize FE-ODE basis vector fields before RK4 integration.
+
+    This follows the spirit of neural ODE kinetic/Jacobian regularization: keep
+    vector fields small and locally smooth so the integrated dynamics are easier
+    to solve and less prone to irregular trajectories.
+    """
+
+    regularization_xs = _subsample_regularization_points(xs, max_points=max_points)
+    regularization_xs = regularization_xs.detach().clone().requires_grad_(include_jacobian)
+    raw_basis = evaluate_raw_basis_functions(model, regularization_xs)
+    kinetic_loss = raw_basis.square().mean()
+    if not include_jacobian:
+        return kinetic_loss, raw_basis.new_zeros(())
+
+    probe = torch.randn_like(raw_basis)
+    projection = (raw_basis * probe).sum()
+    (gradient,) = torch.autograd.grad(
+        projection,
+        regularization_xs,
+        create_graph=True,
+        retain_graph=True,
+    )
+    jacobian_loss = gradient.square().mean()
+    return kinetic_loss, jacobian_loss
+
+
+def _subsample_regularization_points(xs: torch.Tensor, *, max_points: int) -> torch.Tensor:
+    flat_xs = xs.reshape(-1, xs.shape[-1])
+    if flat_xs.shape[0] <= max_points:
+        return flat_xs
+    indices = torch.randperm(flat_xs.shape[0], device=flat_xs.device)[:max_points]
+    return flat_xs[indices]
 
 
 def evaluate_raw_basis_functions(
