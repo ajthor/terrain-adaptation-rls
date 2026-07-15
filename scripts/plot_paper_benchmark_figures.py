@@ -53,6 +53,16 @@ METHODS = (
     MethodSpec("node_static", "NODE", "#dc2626", "h", "-."),
 )
 METHOD_BY_KEY = {method.key: method for method in METHODS}
+FOCUSED_METHOD_KEYS = (
+    "fe_static",
+    "fe_rls",
+    "fe_bayes",
+    "neuralfly",
+    "alpaca_cold",
+    "maml_online",
+    "node_static",
+)
+FOCUSED_METHODS = tuple(method for method in METHODS if method.key in FOCUSED_METHOD_KEYS)
 
 VDP_METHOD_MAP = {
     "fe_ode_static": "fe_static",
@@ -211,64 +221,6 @@ def main(argv: list[str] | None = None) -> int:
     window_records = collect_window_records(window_sources)
     write_summary_csv(output_dir / "paper_metric_values.csv", records)
     write_coverage_grid(output_dir / "coverage_grid.png", records)
-    write_metric_lines(
-        output_dir / "mean_one_step_train.png",
-        records,
-        metric="one_step",
-        split="train",
-        ylabel="mean one-step error",
-    )
-    write_metric_lines(
-        output_dir / "mean_one_step_heldout.png",
-        records,
-        metric="one_step",
-        split="held-out",
-        ylabel="mean one-step error",
-    )
-    write_metric_lines(
-        output_dir / "trajectory_error_heldout.png",
-        records,
-        metric="trajectory",
-        split="held-out",
-        ylabel="mean trajectory error",
-    )
-    write_k_step_summary(
-        output_dir / "mean_k_step_train.png",
-        records,
-        split="train",
-        metric_prefix="k_endpoint",
-        ylabel="mean k-step endpoint error",
-    )
-    write_k_step_summary(
-        output_dir / "mean_k_step_heldout.png",
-        records,
-        split="held-out",
-        metric_prefix="k_endpoint",
-        ylabel="mean k-step endpoint error",
-    )
-    write_k_step_summary(
-        output_dir / "accumulated_k_step_heldout.png",
-        records,
-        split="held-out",
-        metric_prefix="k_accumulated",
-        ylabel="accumulated k-step error",
-    )
-    write_window_k_step_plot(
-        output_dir / "accumulated_k_step_over_windows_heldout.png",
-        window_records,
-        split="held-out",
-        horizon=10,
-    )
-    write_window_k_step_panels(
-        output_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
-        window_sources,
-        split="held-out",
-    )
-    write_vdp_mu_plot(output_dir / "vdp_performance_over_mu.png", records)
-    write_warty_switching_plot(
-        output_dir / "warty_error_over_time.png",
-        online_sources,
-    )
     write_experiment_specific_figures(
         output_dir,
         records,
@@ -299,6 +251,7 @@ def write_experiment_specific_figures(
                     split=split,
                     ylabel="mean one-step error",
                     experiment=experiment,
+                    methods=FOCUSED_METHODS,
                 )
             if split == "held-out" and has_records(
                 records,
@@ -313,15 +266,18 @@ def write_experiment_specific_figures(
                     split=split,
                     ylabel="mean trajectory error",
                     experiment=experiment,
+                    methods=FOCUSED_METHODS,
                 )
             if has_k_records(records, experiment=experiment, split=split, prefix="k_endpoint"):
                 write_k_step_summary(
-                    experiment_dir / f"mean_k_step_{split_slug(split)}.png",
+                    experiment_dir / f"median_k_step_{split_slug(split)}.png",
                     records,
                     split=split,
                     metric_prefix="k_endpoint",
-                    ylabel="mean k-step endpoint error",
+                    ylabel="median k-step endpoint error",
                     experiment=experiment,
+                    reducer="median",
+                    methods=FOCUSED_METHODS,
                 )
             if split == "held-out" and has_k_records(
                 records,
@@ -336,37 +292,31 @@ def write_experiment_specific_figures(
                     metric_prefix="k_accumulated",
                     ylabel="accumulated k-step error",
                     experiment=experiment,
+                    reducer="median",
+                    methods=FOCUSED_METHODS,
                 )
         if experiment == "VDP":
             write_vdp_mu_plot(experiment_dir / "performance_over_mu.png", records)
         if experiment == "Warty":
-            write_warty_switching_plot(experiment_dir / "error_over_time.png", online_sources)
+            write_warty_switching_plot(
+                experiment_dir / "error_over_time.png",
+                online_sources,
+                methods=FOCUSED_METHODS,
+            )
             if has_window_records(window_records, experiment=experiment, split="held-out", horizon=10):
-                write_window_k_step_plot(
-                    experiment_dir / "accumulated_k_step_over_windows_heldout.png",
-                    window_records,
-                    split="held-out",
-                    horizon=10,
-                    experiment=experiment,
-                )
-                write_window_k_step_panels(
-                    experiment_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
+                write_sliding_k_step_panels(
+                    experiment_dir / "sliding_logged_k_step_heldout.png",
                     window_sources_for_experiment(window_sources, experiment),
                     split="held-out",
+                    methods=FOCUSED_METHODS,
                 )
         if experiment == "Jackal":
             if has_window_records(window_records, experiment=experiment, split="held-out", horizon=10):
-                write_window_k_step_plot(
-                    experiment_dir / "accumulated_k_step_over_windows_heldout.png",
-                    window_records,
-                    split="held-out",
-                    horizon=10,
-                    experiment=experiment,
-                )
-                write_window_k_step_panels(
-                    experiment_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
+                write_sliding_k_step_panels(
+                    experiment_dir / "sliding_logged_k_step_heldout.png",
                     window_sources_for_experiment(window_sources, experiment),
                     split="held-out",
+                    methods=FOCUSED_METHODS,
                 )
 
 
@@ -464,6 +414,7 @@ def write_metric_lines(
     split: str,
     ylabel: str,
     experiment: str | None = None,
+    methods: Iterable[MethodSpec] = METHODS,
 ) -> None:
     import matplotlib
 
@@ -480,7 +431,7 @@ def write_metric_lines(
     ]
     conditions = ordered_conditions(points)
     fig, ax = plt.subplots(figsize=(max(4.0, 0.65 * len(conditions) + 2.8), 2.6))
-    for method in METHODS:
+    for method in methods:
         values = [lookup_value(points, condition, method.key) for condition in conditions]
         if all(value is None for value in values):
             continue
@@ -513,6 +464,8 @@ def write_k_step_summary(
     metric_prefix: str,
     ylabel: str,
     experiment: str | None = None,
+    reducer: str = "mean",
+    methods: Iterable[MethodSpec] = METHODS,
 ) -> None:
     import matplotlib
 
@@ -544,11 +497,11 @@ def write_k_step_summary(
             prefix=metric_prefix,
             fallback_to_candidates=True,
         )
-        for method in METHODS:
+        for method in methods:
             values = []
             for horizon in horizons:
                 metric = f"k{horizon}_{metric_prefix.removeprefix('k_')}"
-                value = mean_value(experiment_records, metric, method.key)
+                value = reduced_value(experiment_records, metric, method.key, reducer=reducer)
                 values.append(value)
             if all(value is None for value in values):
                 continue
@@ -761,6 +714,164 @@ def collect_window_trace_rows(source: WindowSource) -> list[dict[str, str]]:
     return rows
 
 
+def write_sliding_k_step_panels(
+    path: Path,
+    sources: Iterable[WindowSource],
+    *,
+    split: str,
+    methods: Iterable[MethodSpec] = FOCUSED_METHODS,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    set_paper_style()
+    import matplotlib.pyplot as plt
+
+    trace_points = collect_sliding_k_step_traces(sources, split=split, methods=methods)
+    if not trace_points:
+        return
+
+    horizons = [
+        horizon
+        for horizon in PREFERRED_HORIZONS
+        if any(point["horizon"] == horizon for point in trace_points)
+    ]
+    if not horizons:
+        return
+
+    method_list = list(methods)
+    fig, axes = plt.subplots(
+        len(horizons),
+        1,
+        figsize=(5.25, max(2.2, 1.65 * len(horizons))),
+        sharex=True,
+        squeeze=False,
+    )
+    for ax, horizon in zip(axes.ravel(), horizons):
+        horizon_points = [point for point in trace_points if point["horizon"] == horizon]
+        for method in method_list:
+            series = [
+                (point["time"], point["value"])
+                for point in horizon_points
+                if point["method"] == method.key
+            ]
+            series = sorted(series)
+            if not series:
+                continue
+            smoothed_values = smooth_values([value for _, value in series], window=9)
+            ax.plot(
+                [time for time, _ in series],
+                smoothed_values,
+                color=method.color,
+                linestyle=method.style,
+                marker=None,
+                linewidth=1.45,
+                label=method.label,
+            )
+        ax.set_ylabel(f"k={horizon}\naccum. error")
+        ax.set_yscale("log")
+        ax.grid(axis="y", alpha=0.25)
+    axes.ravel()[-1].set_xlabel("time since clip start (s)")
+    add_method_legend(fig, ncols=4, methods=method_list)
+    fig.tight_layout(rect=(0, 0, 1, 0.9))
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def collect_sliding_k_step_traces(
+    sources: Iterable[WindowSource],
+    *,
+    split: str,
+    methods: Iterable[MethodSpec],
+) -> list[dict[str, float | str | int]]:
+    method_list = list(methods)
+    grouped: dict[tuple[int, str, int], list[float]] = {}
+    for source in sources:
+        if source.split != split:
+            continue
+        run_dir = source.path.parent
+        if not run_dir.is_dir():
+            continue
+        for prediction_path in sorted(run_dir.glob("**/streaming_predictions.csv")):
+            rows = load_rows(prediction_path)
+            if not rows:
+                continue
+            times = [finite_float(row.get("time")) for row in rows]
+            for method in method_list:
+                errors = prediction_errors(rows, method.key)
+                if not errors:
+                    continue
+                for horizon in PREFERRED_HORIZONS:
+                    if len(errors) < horizon:
+                        continue
+                    for index in range(0, len(errors) - horizon + 1):
+                        time = times[index]
+                        if time is None:
+                            continue
+                        bucket_time = int(round(time * 10.0))
+                        value = sum(errors[index : index + horizon])
+                        grouped.setdefault((horizon, method.key, bucket_time), []).append(value)
+
+    points: list[dict[str, float | str | int]] = []
+    for (horizon, method, bucket_time), values in sorted(grouped.items()):
+        points.append(
+            {
+                "horizon": horizon,
+                "method": method,
+                "time": bucket_time / 10.0,
+                "value": median_value(values),
+            }
+        )
+    return points
+
+
+def prediction_errors(rows: list[dict[str, str]], method: str) -> list[float]:
+    prefix_candidates = method_prefix_candidates(method)
+    for prefix in prefix_candidates:
+        prediction_columns = [f"{prefix}_prediction_{dim}" for dim in range(6)]
+        if all(prediction_columns[dim] in rows[0] for dim in range(6)):
+            errors = []
+            for row in rows:
+                total = 0.0
+                valid = True
+                for dim in range(6):
+                    target = finite_float(row.get(f"target_{dim}"))
+                    prediction = finite_float(row.get(prediction_columns[dim]))
+                    if target is None or prediction is None:
+                        valid = False
+                        break
+                    total += (prediction - target) ** 2
+                if valid:
+                    errors.append(total**0.5)
+            return errors
+    return []
+
+
+def method_prefix_candidates(method: str) -> list[str]:
+    candidates = [method]
+    if method == "fe_static":
+        candidates.extend(["offline_fe", "fe_prior_static"])
+    elif method == "neuralfly":
+        candidates.extend(["neuralfly_rls", "offline_neuralfly"])
+    elif method == "alpaca_cold":
+        candidates.append("alpaca_cold_start_online")
+    elif method == "node_static":
+        candidates.append("static_node")
+    return candidates
+
+
+def smooth_values(values: list[float], *, window: int) -> list[float]:
+    if window <= 1 or len(values) <= 2:
+        return values
+    radius = max(1, window // 2)
+    smoothed = []
+    for index in range(len(values)):
+        left = max(0, index - radius)
+        right = min(len(values), index + radius + 1)
+        smoothed.append(median_value(values[left:right]))
+    return smoothed
+
+
 def write_vdp_mu_plot(path: Path, records: list[MetricRecord]) -> None:
     import matplotlib
 
@@ -806,7 +917,12 @@ def write_vdp_mu_plot(path: Path, records: list[MetricRecord]) -> None:
     plt.close(fig)
 
 
-def write_warty_switching_plot(path: Path, sources: Mapping[str, Path]) -> None:
+def write_warty_switching_plot(
+    path: Path,
+    sources: Mapping[str, Path],
+    *,
+    methods: Iterable[MethodSpec] = METHODS,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -818,7 +934,7 @@ def write_warty_switching_plot(path: Path, sources: Mapping[str, Path]) -> None:
         axes = [axes]
     for ax, (label, source) in zip(axes, sources.items()):
         rows = load_rows(source) if source.is_file() else []
-        for method in METHODS:
+        for method in methods:
             series = [
                 row
                 for row in rows
@@ -828,13 +944,14 @@ def write_warty_switching_plot(path: Path, sources: Mapping[str, Path]) -> None:
                 continue
             series = sorted(series, key=lambda row: finite_float(row.get("time_mean")) or 0.0)
             times = [finite_float(row.get("time_mean")) for row in series]
-            values = [finite_float(row.get("cumulative_mean_error")) for row in series]
+            values = [finite_float(row.get("mean_error")) for row in series]
             filtered = [(time, value) for time, value in zip(times, values) if time is not None and value is not None]
             if not filtered:
                 continue
+            smoothed_values = smooth_values([value for _, value in filtered], window=9)
             ax.plot(
                 [time for time, _ in filtered],
-                [value for _, value in filtered],
+                smoothed_values,
                 color=method.color,
                 marker=None,
                 linestyle=method.style,
@@ -845,8 +962,8 @@ def write_warty_switching_plot(path: Path, sources: Mapping[str, Path]) -> None:
         ax.set_xlabel("time (s)")
         ax.set_yscale("log")
         ax.grid(axis="y", alpha=0.25)
-    axes[0].set_ylabel("accumulated one-step error")
-    add_method_legend(fig, ncols=5)
+    axes[0].set_ylabel("one-step error")
+    add_method_legend(fig, ncols=4, methods=methods)
     fig.tight_layout(rect=(0, 0, 1, 0.78))
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -937,7 +1054,12 @@ def write_summary_csv(path: Path, records: list[MetricRecord]) -> None:
         writer.writerows(rows)
 
 
-def add_method_legend(fig, *, ncols: int) -> None:
+def add_method_legend(
+    fig,
+    *,
+    ncols: int,
+    methods: Iterable[MethodSpec] = METHODS,
+) -> None:
     import matplotlib.pyplot as plt
 
     handles = [
@@ -951,7 +1073,7 @@ def add_method_legend(fig, *, ncols: int) -> None:
             markersize=3.6,
             label=method.label,
         )
-        for method in METHODS
+        for method in methods
     ]
     fig.legend(
         handles=handles,
@@ -1034,6 +1156,31 @@ def mean_value(records: list[MetricRecord], metric: str, method: str) -> float |
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def reduced_value(
+    records: list[MetricRecord],
+    metric: str,
+    method: str,
+    *,
+    reducer: str,
+) -> float | None:
+    values = [record.value for record in records if record.method == method and record.metric == metric]
+    if not values:
+        return None
+    if reducer == "median":
+        return median_value(values)
+    if reducer == "mean":
+        return sum(values) / len(values)
+    raise ValueError(f"unknown reducer {reducer!r}")
+
+
+def median_value(values: list[float]) -> float:
+    sorted_values = sorted(values)
+    midpoint = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[midpoint]
+    return (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2.0
 
 
 def display_condition(record: MetricRecord) -> str:
