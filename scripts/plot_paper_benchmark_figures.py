@@ -130,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--vdp-run", default=DEFAULT_VDP_RUN)
+    parser.add_argument(
+        "--vdp-changing-mu-run",
+        default=None,
+        help="Optional VDP run containing changing_mu_online_error.csv/png.",
+    )
     parser.add_argument("--warty-scene1-run", default=DEFAULT_WARTY_SCENE1_RUN)
     parser.add_argument("--warty-scene5-run", default=DEFAULT_WARTY_SCENE5_RUN)
     parser.add_argument("--jackal-train-run", default=DEFAULT_JACKAL_TRAIN_RUN)
@@ -234,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
         window_sources,
         online_sources,
         vdp_run=Path(args.vdp_run),
+        vdp_changing_mu_run=Path(args.vdp_changing_mu_run or args.vdp_run),
     )
     print(output_dir)
     return 0
@@ -246,6 +252,7 @@ def write_experiment_specific_figures(
     window_sources: Iterable[WindowSource],
     online_sources: Mapping[str, Path],
     vdp_run: Path,
+    vdp_changing_mu_run: Path,
 ) -> None:
     for experiment in ("VDP", "Warty", "Jackal"):
         experiment_dir = output_dir / experiment.lower()
@@ -307,6 +314,7 @@ def write_experiment_specific_figures(
             copy_vdp_online_error_plots(
                 experiment_dir,
                 source_run=vdp_run,
+                changing_mu_run=vdp_changing_mu_run,
             )
         if experiment == "Warty":
             write_warty_switching_plot(
@@ -886,7 +894,12 @@ def method_prefix_candidates(method: str) -> list[str]:
     return candidates
 
 
-def copy_vdp_online_error_plots(output_dir: Path, *, source_run: Path) -> None:
+def copy_vdp_online_error_plots(
+    output_dir: Path,
+    *,
+    source_run: Path,
+    changing_mu_run: Path,
+) -> None:
     copies = {
         "interpolation_mu_1.25_online_error.png": "online_error_mu_1.25.png",
         "extrapolation_mu_3_online_error.png": "online_error_mu_3.0.png",
@@ -895,6 +908,88 @@ def copy_vdp_online_error_plots(output_dir: Path, *, source_run: Path) -> None:
         source = source_run / source_name
         if source.is_file():
             shutil.copyfile(source, output_dir / target_name)
+    changing_mu_csv = changing_mu_run / "changing_mu_online_error.csv"
+    if changing_mu_csv.is_file():
+        shutil.copyfile(changing_mu_csv, output_dir / "changing_mu_online_error.csv")
+        write_changing_mu_online_plot(
+            output_dir / "changing_mu_online_error.png",
+            changing_mu_csv,
+        )
+    else:
+        changing_mu_png = changing_mu_run / "changing_mu_online_error.png"
+        if changing_mu_png.is_file():
+            shutil.copyfile(changing_mu_png, output_dir / "changing_mu_online_error.png")
+
+
+def write_changing_mu_online_plot(path: Path, source_csv: Path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    set_paper_style()
+    import matplotlib.pyplot as plt
+
+    plot_methods = (
+        ("fe_ode_static", "FE static", "#64748b", "--"),
+        ("fe_ode_rls", "FE-RLS", "#0f766e", "-"),
+        ("neuralfly_rls", "NeuralFly", "#d97706", "-"),
+        ("alpaca_cold_start_online", "ALPaCA cold", "#15803d", "-"),
+        ("maml_online", "MAML", "#db2777", "-"),
+        ("node_static", "NODE", "#dc2626", "-."),
+    )
+    by_method: dict[str, list[tuple[float, float]]] = {}
+    mu_by_time: dict[float, float] = {}
+    with source_csv.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            method = str(row["method"])
+            time = float(row["time"])
+            by_method.setdefault(method, []).append((time, float(row["error"])))
+            mu_by_time.setdefault(time, float(row["mu"]))
+
+    fig, ax = plt.subplots(figsize=(5.4, 2.75))
+    for method, label, color, linestyle in plot_methods:
+        series = sorted(by_method.get(method, []))
+        if not series:
+            continue
+        times = [time for time, _ in series]
+        errors = smooth_values([error for _, error in series], window=15)
+        ax.plot(
+            times,
+            errors,
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.45,
+            label=label,
+        )
+
+    ax.set_yscale("log")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("one-step error")
+    ax.grid(axis="y", alpha=0.25)
+    mu_axis = ax.twinx()
+    mu_series = sorted(mu_by_time.items())
+    if mu_series:
+        mu_axis.step(
+            [time for time, _ in mu_series],
+            [mu for _, mu in mu_series],
+            where="post",
+            color="#111827",
+            alpha=0.28,
+            linewidth=1.2,
+        )
+    mu_axis.set_ylabel(r"$\mu$")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles=handles,
+        labels=labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncols=3,
+        frameon=False,
+        columnspacing=0.9,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.82))
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
 
 def smooth_values(values: list[float], *, window: int) -> list[float]:

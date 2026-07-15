@@ -9,6 +9,7 @@ try:
         FEIncrementBasis,
         FEODEBasis,
         NeuralFlyToyBasis,
+        generate_piecewise_vanderpol_trajectory,
         generate_vanderpol_trajectory,
         run_vanderpol_toy_evaluation,
         write_seed_sweep_summary,
@@ -57,6 +58,22 @@ class VanDerPolToyTests(unittest.TestCase):
         self.assertEqual(tuple(trajectory["deltas"].shape), (10, 2))
         self.assertEqual(tuple(trajectory["dt"].shape), (10,))
 
+    def test_piecewise_vanderpol_trajectory_tracks_mu_changes(self):
+        trajectory = generate_piecewise_vanderpol_trajectory(
+            mus=(1.0, 2.0),
+            segment_steps=5,
+            dt=0.02,
+            x0=torch.tensor([2.0, 0.0]),
+        )
+
+        self.assertEqual(tuple(trajectory["states"].shape), (11, 2))
+        self.assertEqual(tuple(trajectory["xs"].shape), (10, 2))
+        self.assertEqual(tuple(trajectory["deltas"].shape), (10, 2))
+        self.assertEqual(tuple(trajectory["dt"].shape), (10,))
+        self.assertEqual(tuple(trajectory["mu"].shape), (10,))
+        self.assertTrue(torch.allclose(trajectory["mu"][:5], torch.full((5,), 1.0)))
+        self.assertTrue(torch.allclose(trajectory["mu"][5:], torch.full((5,), 2.0)))
+
     def test_runs_tiny_vanderpol_evaluation(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result = run_vanderpol_toy_evaluation(
@@ -83,6 +100,8 @@ class VanDerPolToyTests(unittest.TestCase):
             self.assertTrue((artifact_dir / "basis_streamplots_fe_mlp_rls.png").exists())
             self.assertTrue((artifact_dir / "basis_streamplots_neuralfly_rls.png").exists())
             self.assertTrue((artifact_dir / "basis_streamplots_alpaca_rls.png").exists())
+            self.assertTrue((artifact_dir / "changing_mu_online_error.csv").exists())
+            self.assertTrue((artifact_dir / "changing_mu_online_error.png").exists())
             self.assertTrue((artifact_dir / "interpolation_mu_0.75_component_errors.png").exists())
             self.assertTrue(
                 (artifact_dir / "interpolation_mu_0.75_recursive_horizon_errors.png").exists()

@@ -582,6 +582,29 @@ def run_vanderpol_toy_evaluation(
             "rows": scenario_rows,
         }
 
+    if write_diagnostics:
+        write_changing_mu_diagnostic(
+            artifact_path,
+            basis_models=basis_models,
+            direct_models=direct_models,
+            prior_coefficients=prior_coefficients,
+            labels=labels,
+            dt=dt,
+            segment_steps=max(20, eval_steps // 6),
+            device=device,
+            forgetting_factor=forgetting_factor,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            kalman_process_noise=kalman_process_noise,
+            coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+            coefficient_sgd_momentum=coefficient_sgd_momentum,
+            coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+            coefficient_window_size=coefficient_window_size,
+            coefficient_window_ridge=coefficient_window_ridge,
+            maml_inner_learning_rate=maml_inner_learning_rate,
+            maml_inner_steps=maml_inner_steps,
+        )
+
     write_rows_csv(artifact_path / "method_summary.csv", rows)
     if write_diagnostics:
         write_training_loss_plot(
@@ -1826,6 +1849,226 @@ def evaluate_maml_online(
     }
 
 
+def write_changing_mu_diagnostic(
+    artifact_path: Path,
+    *,
+    basis_models: dict[str, torch.nn.Module],
+    direct_models: dict[str, torch.nn.Module],
+    prior_coefficients: dict[str, torch.Tensor],
+    labels: dict[str, str],
+    dt: float,
+    segment_steps: int,
+    device: torch.device,
+    forgetting_factor: float,
+    initial_covariance: float,
+    measurement_noise: float,
+    kalman_process_noise: float,
+    coefficient_sgd_learning_rate: float,
+    coefficient_sgd_momentum: float,
+    coefficient_sgd_weight_decay: float,
+    coefficient_window_size: int,
+    coefficient_window_ridge: float,
+    maml_inner_learning_rate: float,
+    maml_inner_steps: int,
+) -> None:
+    """Write Fig. 2-style online adaptation diagnostic for changing VDP ``mu``."""
+
+    mus = (1.25, 2.5, 0.75, 2.0, 1.0, 3.0)
+    trajectory = generate_piecewise_vanderpol_trajectory(
+        mus=mus,
+        segment_steps=segment_steps,
+        dt=dt,
+        x0=torch.tensor([2.0, 0.0], dtype=torch.float32, device=device),
+    )
+    method_results = {
+        "fe_ode_static": evaluate_coefficient_method(
+            basis_models["fe_ode"],
+            trajectory=trajectory,
+            update_rule="static",
+            initial_coefficients=prior_coefficients["fe_ode"],
+            forgetting_factor=forgetting_factor,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            kalman_process_noise=kalman_process_noise,
+            coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+            coefficient_sgd_momentum=coefficient_sgd_momentum,
+            coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+            coefficient_window_size=coefficient_window_size,
+            coefficient_window_ridge=coefficient_window_ridge,
+            recursive_horizons=(1, 5, 10),
+        ),
+        "fe_ode_rls": evaluate_coefficient_method(
+            basis_models["fe_ode"],
+            trajectory=trajectory,
+            update_rule="rls",
+            initial_coefficients=None,
+            forgetting_factor=forgetting_factor,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            kalman_process_noise=kalman_process_noise,
+            coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+            coefficient_sgd_momentum=coefficient_sgd_momentum,
+            coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+            coefficient_window_size=coefficient_window_size,
+            coefficient_window_ridge=coefficient_window_ridge,
+            recursive_horizons=(1, 5, 10),
+        ),
+        "neuralfly_rls": evaluate_coefficient_method(
+            basis_models["neuralfly"],
+            trajectory=trajectory,
+            update_rule="rls",
+            initial_coefficients=None,
+            forgetting_factor=forgetting_factor,
+            initial_covariance=initial_covariance,
+            measurement_noise=measurement_noise,
+            kalman_process_noise=kalman_process_noise,
+            coefficient_sgd_learning_rate=coefficient_sgd_learning_rate,
+            coefficient_sgd_momentum=coefficient_sgd_momentum,
+            coefficient_sgd_weight_decay=coefficient_sgd_weight_decay,
+            coefficient_window_size=coefficient_window_size,
+            coefficient_window_ridge=coefficient_window_ridge,
+            recursive_horizons=(1, 5, 10),
+        ),
+        "alpaca_cold_start_online": evaluate_alpaca_method(
+            basis_models["alpaca"],
+            trajectory=trajectory,
+            update_rule="online",
+            cold_start=True,
+            initial_covariance=initial_covariance,
+            recursive_horizons=(1, 5, 10),
+        ),
+        "node_static": evaluate_direct_model(
+            direct_models["node_static"],
+            trajectory=trajectory,
+            recursive_horizons=(1, 5, 10),
+        ),
+        "maml_online": evaluate_maml_online(
+            direct_models["maml"],
+            trajectory=trajectory,
+            inner_learning_rate=maml_inner_learning_rate,
+            inner_steps=maml_inner_steps,
+            recursive_horizons=(1, 5, 10),
+            device=device,
+        ),
+    }
+    write_changing_mu_csv(
+        artifact_path / "changing_mu_online_error.csv",
+        trajectory=trajectory,
+        method_results=method_results,
+        labels=labels,
+    )
+    write_changing_mu_plot(
+        artifact_path / "changing_mu_online_error.png",
+        trajectory=trajectory,
+        method_results=method_results,
+        labels=labels,
+    )
+
+
+def write_changing_mu_csv(
+    path: Path,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    method_results: dict[str, dict[str, object]],
+    labels: dict[str, str],
+) -> None:
+    mu = trajectory["mu"].detach().cpu()
+    dt = trajectory["dt"].detach().cpu()
+    times = torch.cumsum(dt, dim=0) - dt[0]
+    rows: list[dict[str, object]] = []
+    for name, result in method_results.items():
+        errors = result["errors"]
+        assert isinstance(errors, torch.Tensor)
+        for index, error in enumerate(errors):
+            rows.append(
+                {
+                    "index": index,
+                    "time": float(times[index]),
+                    "mu": float(mu[index]),
+                    "method": name,
+                    "label": labels.get(name, name),
+                    "error": float(error),
+                }
+            )
+    write_rows_csv(path, rows)
+
+
+def write_changing_mu_plot(
+    path: Path,
+    *,
+    trajectory: dict[str, torch.Tensor],
+    method_results: dict[str, dict[str, object]],
+    labels: dict[str, str],
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    mu = trajectory["mu"].detach().cpu()
+    dt = trajectory["dt"].detach().cpu()
+    times = torch.cumsum(dt, dim=0) - dt[0]
+    plot_methods = (
+        ("fe_ode_static", "#64748b", "--"),
+        ("fe_ode_rls", "#0f766e", "-"),
+        ("neuralfly_rls", "#d97706", "-"),
+        ("alpaca_cold_start_online", "#15803d", "-"),
+        ("maml_online", "#db2777", "-"),
+        ("node_static", "#dc2626", "-."),
+    )
+    display_labels = {
+        "fe_ode_static": "FE static",
+        "fe_ode_rls": "FE-RLS",
+        "neuralfly_rls": "NeuralFly",
+        "alpaca_cold_start_online": "ALPaCA cold",
+        "maml_online": "MAML",
+        "node_static": "NODE",
+    }
+    fig, ax = plt.subplots(figsize=(5.4, 2.75))
+    for name, color, linestyle in plot_methods:
+        if name not in method_results:
+            continue
+        errors = method_results[name]["errors"]
+        assert isinstance(errors, torch.Tensor)
+        values = smooth_values([float(value) for value in errors], window=15)
+        ax.plot(
+            times.numpy(),
+            values,
+            color=color,
+            linestyle=linestyle,
+            linewidth=1.45,
+            label=display_labels.get(name, labels.get(name, name)),
+        )
+    ax.set_yscale("log")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("one-step error")
+    ax.grid(axis="y", alpha=0.25)
+    mu_axis = ax.twinx()
+    mu_axis.step(
+        times.numpy(),
+        mu.numpy(),
+        where="post",
+        color="#111827",
+        alpha=0.28,
+        linewidth=1.2,
+        label=r"$\mu$",
+    )
+    mu_axis.set_ylabel(r"$\mu$")
+    handles, legend_labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles=handles,
+        labels=legend_labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncols=3,
+        frameon=False,
+        columnspacing=0.9,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.82))
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def summarize_online_errors(
     *,
     errors: torch.Tensor,
@@ -2032,6 +2275,40 @@ def generate_vanderpol_trajectory(
         "xs": xs,
         "dt": torch.full((steps,), dt, dtype=x0.dtype, device=x0.device),
         "deltas": next_states - xs,
+    }
+
+
+def generate_piecewise_vanderpol_trajectory(
+    *,
+    mus: tuple[float, ...],
+    segment_steps: int,
+    dt: float,
+    x0: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    """Generate one continuous VDP trajectory with abrupt changes in ``mu``."""
+
+    if not mus:
+        raise ValueError("mus must contain at least one value")
+    if segment_steps <= 0:
+        raise ValueError("segment_steps must be positive")
+    states = [x0]
+    mu_values: list[float] = []
+    current = x0
+    dt_tensor = torch.tensor(dt, dtype=x0.dtype, device=x0.device)
+    for mu in mus:
+        for _ in range(segment_steps):
+            current = current + _true_vanderpol_delta(current, mu=mu, dt=dt_tensor)
+            states.append(current)
+            mu_values.append(float(mu))
+    state_tensor = torch.stack(states)
+    xs = state_tensor[:-1]
+    next_states = state_tensor[1:]
+    return {
+        "states": state_tensor,
+        "xs": xs,
+        "dt": torch.full((len(mu_values),), dt, dtype=x0.dtype, device=x0.device),
+        "deltas": next_states - xs,
+        "mu": torch.tensor(mu_values, dtype=x0.dtype, device=x0.device),
     }
 
 
@@ -2965,6 +3242,28 @@ def _mean(values: list[float]) -> float:
     if not values:
         return 0.0
     return sum(values) / len(values)
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    midpoint = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[midpoint]
+    return (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2.0
+
+
+def smooth_values(values: list[float], *, window: int) -> list[float]:
+    if window <= 1 or len(values) <= 2:
+        return values
+    radius = max(1, window // 2)
+    smoothed = []
+    for index in range(len(values)):
+        left = max(0, index - radius)
+        right = min(len(values), index + radius + 1)
+        smoothed.append(_median(values[left:right]))
+    return smoothed
 
 
 def _std(values: list[float]) -> float:
