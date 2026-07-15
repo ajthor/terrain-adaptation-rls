@@ -26,7 +26,9 @@ DEFAULT_JACKAL_ICE_RUN = (
     "outputs/eval/20260713T204828Z_jackal_direct_ice_fe_bayes_alpaca_cold_256_plots"
 )
 
-REQUESTED_HORIZONS = (5, 10, 25)
+PREFERRED_HORIZONS = (1, 5, 10, 20, 50)
+FALLBACK_HORIZONS = (25,)
+CANDIDATE_HORIZONS = PREFERRED_HORIZONS + FALLBACK_HORIZONS
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,7 @@ VDP_METHOD_MAP = {
     "node_static": "node_static",
 }
 REAL_METHOD_MAP = {
+    "offline_fe": "fe_static",
     "fe_prior_static": "fe_static",
     "fe_rls": "fe_rls",
     "fe_bayes": "fe_bayes",
@@ -72,6 +75,7 @@ REAL_METHOD_MAP = {
     "fe_window_ls": "fe_window_ls",
     "fe_sgd": "fe_sgd",
     "neuralfly_rls": "neuralfly",
+    "offline_neuralfly": "neuralfly",
     "alpaca_cold_start_online": "alpaca_cold",
     "maml_online": "maml_online",
     "static_node": "node_static",
@@ -255,12 +259,23 @@ def main(argv: list[str] | None = None) -> int:
         split="held-out",
         horizon=10,
     )
+    write_window_k_step_panels(
+        output_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
+        window_sources,
+        split="held-out",
+    )
     write_vdp_mu_plot(output_dir / "vdp_performance_over_mu.png", records)
     write_warty_switching_plot(
         output_dir / "warty_error_over_time.png",
         online_sources,
     )
-    write_experiment_specific_figures(output_dir, records, window_records, online_sources)
+    write_experiment_specific_figures(
+        output_dir,
+        records,
+        window_records,
+        window_sources,
+        online_sources,
+    )
     print(output_dir)
     return 0
 
@@ -269,6 +284,7 @@ def write_experiment_specific_figures(
     output_dir: Path,
     records: list[MetricRecord],
     window_records: list[MetricRecord],
+    window_sources: Iterable[WindowSource],
     online_sources: Mapping[str, Path],
 ) -> None:
     for experiment in ("VDP", "Warty", "Jackal"):
@@ -333,6 +349,11 @@ def write_experiment_specific_figures(
                     horizon=10,
                     experiment=experiment,
                 )
+                write_window_k_step_panels(
+                    experiment_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
+                    window_sources_for_experiment(window_sources, experiment),
+                    split="held-out",
+                )
         if experiment == "Jackal":
             if has_window_records(window_records, experiment=experiment, split="held-out", horizon=10):
                 write_window_k_step_plot(
@@ -341,6 +362,11 @@ def write_experiment_specific_figures(
                     split="held-out",
                     horizon=10,
                     experiment=experiment,
+                )
+                write_window_k_step_panels(
+                    experiment_dir / "accumulated_k_step_over_windows_heldout_all_k.png",
+                    window_sources_for_experiment(window_sources, experiment),
+                    split="held-out",
                 )
 
 
@@ -385,7 +411,7 @@ def collect_window_records(sources: Iterable[WindowSource]) -> list[MetricRecord
                 continue
             window_index = row.get("window_index", "")
             condition = f"{source.condition} window {window_index}"
-            for horizon in REQUESTED_HORIZONS:
+            for horizon in CANDIDATE_HORIZONS:
                 value = finite_float(row.get(f"logged_k{horizon}_accumulated_error_mean"))
                 if value is None:
                     continue
@@ -415,7 +441,7 @@ def metric_values(row: Mapping[str, str], kind: str) -> Iterable[tuple[str, floa
     trajectory = finite_float(row.get(trajectory_key))
     if trajectory is not None:
         yield "trajectory", trajectory
-    for horizon in REQUESTED_HORIZONS:
+    for horizon in CANDIDATE_HORIZONS:
         if kind == "vdp":
             endpoint_key = f"recursive_k{horizon}_final_step_error_mean"
             accumulated_key = f"recursive_k{horizon}_accumulated_error_mean"
@@ -513,16 +539,21 @@ def write_k_step_summary(
             for record in split_records
             if record.experiment == experiment
         ]
+        horizons = available_horizons(
+            experiment_records,
+            prefix=metric_prefix,
+            fallback_to_candidates=True,
+        )
         for method in METHODS:
             values = []
-            for horizon in REQUESTED_HORIZONS:
+            for horizon in horizons:
                 metric = f"k{horizon}_{metric_prefix.removeprefix('k_')}"
                 value = mean_value(experiment_records, metric, method.key)
                 values.append(value)
             if all(value is None for value in values):
                 continue
             ax.plot(
-                REQUESTED_HORIZONS,
+                horizons,
                 [float("nan") if value is None else value for value in values],
                 color=method.color,
                 marker=method.marker,
@@ -540,7 +571,7 @@ def write_k_step_summary(
             ha="left",
             fontsize=8,
         )
-        ax.set_xticks(REQUESTED_HORIZONS)
+        ax.set_xticks(horizons)
         ax.set_xlabel("k")
         ax.set_yscale("log")
         ax.grid(axis="y", alpha=0.25)
@@ -607,6 +638,127 @@ def write_window_k_step_plot(
     fig.tight_layout(rect=(0, 0, 1, 0.78))
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+def write_window_k_step_panels(
+    path: Path,
+    sources: Iterable[WindowSource],
+    *,
+    split: str,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    set_paper_style()
+    import matplotlib.pyplot as plt
+
+    source_list = [source for source in sources if source.split == split and source.path.is_file()]
+    rows_by_experiment = {
+        source.experiment: collect_window_trace_rows(source)
+        for source in source_list
+    }
+    rows_by_experiment = {
+        experiment: rows
+        for experiment, rows in rows_by_experiment.items()
+        if rows
+    }
+    if not rows_by_experiment:
+        return
+
+    horizons = [
+        horizon
+        for horizon in PREFERRED_HORIZONS
+        if any(
+            any(f"k{horizon}_" in key for key in row)
+            for rows in rows_by_experiment.values()
+            for row in rows
+        )
+    ]
+    if not horizons:
+        return
+
+    experiments = sorted(rows_by_experiment, key=lambda name: ({"Warty": 0, "Jackal": 1}.get(name, 99), name))
+    fig, axes = plt.subplots(
+        len(horizons),
+        len(experiments),
+        figsize=(max(4.0, 3.35 * len(experiments)), max(2.35, 1.85 * len(horizons))),
+        sharey="row",
+        squeeze=False,
+    )
+    for row_index, horizon in enumerate(horizons):
+        metric = f"logged_k{horizon}_accumulated_error_mean"
+        for col_index, experiment in enumerate(experiments):
+            ax = axes[row_index][col_index]
+            rows = rows_by_experiment[experiment]
+            for method in METHODS:
+                points = [
+                    (
+                        finite_float(record.get("time")),
+                        finite_float(record.get(metric)),
+                    )
+                    for record in rows
+                    if record.get("method") == method.key
+                ]
+                points = [
+                    (time, value)
+                    for time, value in sorted(points)
+                    if time is not None and value is not None
+                ]
+                if not points:
+                    continue
+                ax.plot(
+                    [time for time, _ in points],
+                    [value for _, value in points],
+                    color=method.color,
+                    marker=method.marker,
+                    linestyle=method.style,
+                    linewidth=1.25,
+                    markersize=2.8,
+                    label=method.label,
+                )
+            if row_index == 0:
+                ax.text(
+                    0.02,
+                    0.96,
+                    experiment,
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    fontsize=8,
+                )
+            if row_index == len(horizons) - 1:
+                ax.set_xlabel("time (s)")
+            if col_index == 0:
+                ax.set_ylabel(f"k={horizon}\naccum. error")
+            ax.set_yscale("log")
+            ax.grid(axis="y", alpha=0.25)
+    add_method_legend(fig, ncols=5)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    fig.savefig(path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+def collect_window_trace_rows(source: WindowSource) -> list[dict[str, str]]:
+    rows = []
+    for row in load_rows(source.path):
+        method = canonical_method(row.get("method", ""), source.kind)
+        if method is None:
+            continue
+        start_index = finite_float(row.get("start_index"))
+        mean_dt = finite_float(row.get("mean_dt"))
+        time = finite_float(row.get("time"))
+        if time is None:
+            if start_index is not None and mean_dt is not None:
+                time = start_index * mean_dt
+            elif start_index is not None:
+                time = start_index
+        if time is None:
+            continue
+        record = dict(row)
+        record["method"] = method
+        record["time"] = str(time)
+        rows.append(record)
+    return rows
 
 
 def write_vdp_mu_plot(path: Path, records: list[MetricRecord]) -> None:
@@ -713,15 +865,15 @@ def write_coverage_grid(path: Path, records: list[MetricRecord]) -> None:
         ("VDP train 1-step", "VDP", "train", "one_step"),
         ("VDP held-out 1-step", "VDP", "held-out", "one_step"),
         ("VDP held-out traj.", "VDP", "held-out", "trajectory"),
-        ("VDP held-out k=25", "VDP", "held-out", "k25_endpoint"),
+        ("VDP held-out k-step", "VDP", "held-out", "k10_endpoint"),
         ("Warty train 1-step", "Warty", "train", "one_step"),
         ("Warty held-out 1-step", "Warty", "held-out", "one_step"),
         ("Warty held-out traj.", "Warty", "held-out", "trajectory"),
-        ("Warty held-out k=25", "Warty", "held-out", "k25_endpoint"),
+        ("Warty held-out k=50", "Warty", "held-out", "k50_endpoint"),
         ("Jackal train 1-step", "Jackal", "train", "one_step"),
         ("Jackal held-out 1-step", "Jackal", "held-out", "one_step"),
         ("Jackal held-out traj.", "Jackal", "held-out", "trajectory"),
-        ("Jackal held-out k=25", "Jackal", "held-out", "k25_endpoint"),
+        ("Jackal held-out k=50", "Jackal", "held-out", "k50_endpoint"),
     ]
     matrix = []
     for method in METHODS:
@@ -803,7 +955,8 @@ def add_method_legend(fig, *, ncols: int) -> None:
     ]
     fig.legend(
         handles=handles,
-        loc="outside upper center",
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
         ncols=ncols,
         frameon=False,
         columnspacing=0.9,
@@ -917,7 +1070,7 @@ def has_k_records(
         and record.split == split
         and record.metric == f"k{horizon}_{suffix}"
         for record in records
-        for horizon in REQUESTED_HORIZONS
+        for horizon in CANDIDATE_HORIZONS
     )
 
 
@@ -945,6 +1098,36 @@ def split_slug(split: str) -> str:
 def canonical_method(method: str, kind: str) -> str | None:
     mapping = VDP_METHOD_MAP if kind == "vdp" else REAL_METHOD_MAP
     return mapping.get(method)
+
+
+def available_horizons(
+    records: list[MetricRecord],
+    *,
+    prefix: str,
+    fallback_to_candidates: bool = False,
+) -> list[int]:
+    suffix = prefix.removeprefix("k_")
+    found = {
+        horizon
+        for horizon in CANDIDATE_HORIZONS
+        if any(record.metric == f"k{horizon}_{suffix}" for record in records)
+    }
+    preferred = [horizon for horizon in PREFERRED_HORIZONS if horizon in found]
+    if preferred:
+        return preferred
+    fallback = [horizon for horizon in FALLBACK_HORIZONS if horizon in found]
+    if fallback:
+        return fallback
+    if fallback_to_candidates:
+        return [horizon for horizon in CANDIDATE_HORIZONS if horizon in found]
+    return []
+
+
+def window_sources_for_experiment(
+    sources: Iterable[WindowSource],
+    experiment: str,
+) -> list[WindowSource]:
+    return [source for source in sources if source.experiment == experiment]
 
 
 def vdp_condition(scenario: str) -> str:
