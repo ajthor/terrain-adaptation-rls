@@ -72,6 +72,8 @@ VDP_METHOD_MAP = {
     "fe_ode_window_ls": "fe_window_ls",
     "fe_ode_sgd": "fe_sgd",
     "neuralfly_rls": "neuralfly",
+    "neuralfly_prior_rls": None,
+    "neuralfly_static": None,
     "alpaca_cold_start_online": "alpaca_cold",
     "maml_online": "maml_online",
     "node_static": "node_static",
@@ -85,11 +87,15 @@ REAL_METHOD_MAP = {
     "fe_window_ls": "fe_window_ls",
     "fe_sgd": "fe_sgd",
     "neuralfly_rls": "neuralfly",
-    "offline_neuralfly": "neuralfly",
+    "neuralfly_prior_rls": None,
+    "neuralfly_prior_static": None,
+    "offline_neuralfly": None,
     "alpaca_cold_start_online": "alpaca_cold",
     "maml_online": "maml_online",
     "static_node": "node_static",
 }
+
+PLOTTED_K_STEP_ERROR_CEILING = 1_000.0
 
 
 @dataclass(frozen=True)
@@ -227,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         window_records,
         window_sources,
         online_sources,
+        vdp_run=Path(args.vdp_run),
     )
     print(output_dir)
     return 0
@@ -238,6 +245,7 @@ def write_experiment_specific_figures(
     window_records: list[MetricRecord],
     window_sources: Iterable[WindowSource],
     online_sources: Mapping[str, Path],
+    vdp_run: Path,
 ) -> None:
     for experiment in ("VDP", "Warty", "Jackal"):
         experiment_dir = output_dir / experiment.lower()
@@ -296,7 +304,10 @@ def write_experiment_specific_figures(
                     methods=FOCUSED_METHODS,
                 )
         if experiment == "VDP":
-            write_vdp_mu_plot(experiment_dir / "performance_over_mu.png", records)
+            copy_vdp_online_error_plots(
+                experiment_dir,
+                source_run=vdp_run,
+            )
         if experiment == "Warty":
             write_warty_switching_plot(
                 experiment_dir / "error_over_time.png",
@@ -430,28 +441,41 @@ def write_metric_lines(
         and (experiment is None or record.experiment == experiment)
     ]
     conditions = ordered_conditions(points)
-    fig, ax = plt.subplots(figsize=(max(4.0, 0.65 * len(conditions) + 2.8), 2.6))
-    for method in methods:
+    method_list = [
+        method
+        for method in methods
+        if any(
+            lookup_value(points, condition, method.key) is not None
+            for condition in conditions
+        )
+    ]
+    if not conditions or not method_list:
+        return
+    fig, ax = plt.subplots(
+        figsize=(max(4.4, 0.9 * len(conditions) + 0.32 * len(method_list) + 2.4), 2.75)
+    )
+    group_width = min(0.82, 0.12 * len(method_list))
+    bar_width = group_width / max(1, len(method_list))
+    centers = list(range(len(conditions)))
+    for method_index, method in enumerate(method_list):
         values = [lookup_value(points, condition, method.key) for condition in conditions]
         if all(value is None for value in values):
             continue
-        ax.plot(
-            range(len(conditions)),
+        offset = -group_width / 2.0 + (method_index + 0.5) * bar_width
+        ax.bar(
+            [center + offset for center in centers],
             [float("nan") if value is None else value for value in values],
             color=method.color,
-            marker=method.marker,
-            linestyle=method.style,
-            linewidth=1.5,
-            markersize=3.4,
             label=method.label,
+            width=bar_width * 0.92,
         )
     ax.set_yscale("log")
-    ax.set_xticks(range(len(conditions)))
+    ax.set_xticks(centers)
     ax.set_xticklabels(conditions, rotation=22, ha="right")
     ax.set_ylabel(ylabel)
     ax.grid(axis="y", alpha=0.25)
-    add_method_legend(fig, ncols=5)
-    fig.tight_layout(rect=(0, 0, 1, 0.78))
+    add_bar_legend(fig, ncols=min(4, max(1, len(method_list))), methods=method_list)
+    fig.tight_layout(rect=(0, 0, 1, 0.83))
     fig.savefig(path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -502,6 +526,8 @@ def write_k_step_summary(
             for horizon in horizons:
                 metric = f"k{horizon}_{metric_prefix.removeprefix('k_')}"
                 value = reduced_value(experiment_records, metric, method.key, reducer=reducer)
+                if value is not None and value > PLOTTED_K_STEP_ERROR_CEILING:
+                    value = None
                 values.append(value)
             if all(value is None for value in values):
                 continue
@@ -860,6 +886,17 @@ def method_prefix_candidates(method: str) -> list[str]:
     return candidates
 
 
+def copy_vdp_online_error_plots(output_dir: Path, *, source_run: Path) -> None:
+    copies = {
+        "interpolation_mu_1.25_online_error.png": "online_error_mu_1.25.png",
+        "extrapolation_mu_3_online_error.png": "online_error_mu_3.0.png",
+    }
+    for source_name, target_name in copies.items():
+        source = source_run / source_name
+        if source.is_file():
+            shutil.copyfile(source, output_dir / target_name)
+
+
 def smooth_values(values: list[float], *, window: int) -> list[float]:
     if window <= 1 or len(values) <= 2:
         return values
@@ -1086,6 +1123,29 @@ def add_method_legend(
     )
 
 
+def add_bar_legend(
+    fig,
+    *,
+    ncols: int,
+    methods: Iterable[MethodSpec],
+) -> None:
+    from matplotlib.patches import Patch
+
+    handles = [
+        Patch(facecolor=method.color, label=method.label)
+        for method in methods
+    ]
+    fig.legend(
+        handles=handles,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncols=ncols,
+        frameon=False,
+        columnspacing=0.9,
+        handlelength=1.2,
+    )
+
+
 def set_paper_style() -> None:
     import matplotlib.pyplot as plt
 
@@ -1244,7 +1304,7 @@ def split_slug(split: str) -> str:
 
 def canonical_method(method: str, kind: str) -> str | None:
     mapping = VDP_METHOD_MAP if kind == "vdp" else REAL_METHOD_MAP
-    return mapping.get(method)
+    return mapping.get(method, None)
 
 
 def available_horizons(
